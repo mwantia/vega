@@ -1,0 +1,91 @@
+version: '3'
+
+env:
+    CGO_ENABLED: '0'
+    GOARCH: amd64
+    GOOS: linux
+    MAIN_PATH: ./cmd/vega/main.go
+    BUILD_PATH: ./build/vega
+
+dotenv: ['.env']
+
+tasks:
+    default:
+        desc: List all available tasks
+        cmds:
+        - task --list
+        silent: true
+
+    init:
+        desc: Download and tidy Go module dependencies
+        cmds:
+        - go mod download
+        - go mod tidy
+
+    docs:
+        desc: Generate documentation
+        cmds:
+        - task: build
+        - ${BUILD_PATH} config generate --output docs --overwrite
+        ignore_error: true
+
+    build-unix:
+        desc: Compile the project into a static binary for unix
+        cmds:
+        - task: init
+        - go build -a -ldflags '-s -w -extldflags "-static"' -trimpath -o ${BUILD_PATH} ${MAIN_PATH}
+        
+    build-windows:
+        desc: Compile the project with debug information
+        cmds:
+        - task: init
+        - GOOS=windows go build -a -ldflags '-s -w -extldflags "-static"' -trimpath -o ${BUILD_PATH}.exe ${MAIN_PATH}
+
+    build:
+        desc: Compile the project into a static binary
+        cmds:
+        - task: build-unix
+
+    run:
+        desc: Run the agent with the test configuration
+        cmds:
+        - ${BUILD_PATH} ${MOUNT_URI} {{.CLI_ARGS}}
+        ignore_error: true
+
+    test:
+        desc: Run tests with race detection
+        cmds:
+        - timeout 60 go test -cover -v ./...
+
+    test-slim:
+        desc: Run all tests
+        cmds:
+        - timeout 60 go test ./...
+
+    fmt:
+        desc: Format Go code
+        cmds:
+        - go fmt ./...
+
+    vet:
+        desc: Run go vet
+        cmds:
+        - go vet ./...
+
+    lint:
+        desc: Format code and run vet
+        cmds:
+        - task: fmt
+        - task: vet
+
+    clean:
+        desc: Clean build artifacts and coverage files
+        cmds:
+        - rm -f coverage.out coverage.html
+
+    ci:
+        desc: Run all CI checks (lint, test, build)
+        cmds:
+        - task: lint
+        - task: test
+        - task: build
