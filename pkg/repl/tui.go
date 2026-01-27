@@ -340,7 +340,7 @@ func (m *Model) handleCommand(line string) (bool, tea.Cmd) {
 	line = strings.TrimSpace(line)
 
 	switch line {
-	case "quit", "exit":
+	case "quit":
 		m.quitting = true
 		return true, tea.Quit
 
@@ -436,6 +436,9 @@ func (m *Model) execute(input string) {
 
 	_, err = m.vm.Run(bytecode)
 
+	// Check if context was cancelled before cleanup (indicates user interrupt)
+	wasInterrupted := m.execCtx.Err() == context.Canceled
+
 	// Clean up execution context
 	if m.execCancel != nil {
 		m.execCancel()
@@ -444,7 +447,7 @@ func (m *Model) execute(input string) {
 
 	if err != nil {
 		// Check if this was a cancellation (user interrupted)
-		if err == context.Canceled || m.execCtx.Err() == context.Canceled {
+		if err == context.Canceled || wasInterrupted {
 			m.addOutput("Execution interrupted", OutputInfo, cmdIdx)
 			m.status = StatusReady
 			m.statusMsg = "Interrupted"
