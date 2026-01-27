@@ -2,13 +2,16 @@
 
 **Vega** (Virtual Execution & Graph Abstraction) is a lightweight scripting language designed for file system operations and automation. It features Python-like syntax, a stack-based virtual machine, and is written in pure Go with no CGO dependencies.
 
+**Version**: 0.0.1-dev
+
 ## Features
 
 - **Simple syntax** - Python-like scripting that's easy to learn
-- **Interactive REPL** - Explore and experiment with immediate feedback
+- **Interactive TUI REPL** - Full-featured terminal UI with history search, autocomplete, and bytecode inspection
 - **Script execution** - Run `.vega` script files
 - **Pure Go** - No CGO, easy cross-compilation
-- **Built-in functions** - Rich standard library for strings, arrays, and I/O
+- **Built-in functions** - Rich standard library for strings, arrays, I/O, and VFS operations
+- **VFS integration** - Access multiple storage backends (local filesystem, SQLite, PostgreSQL, S3, Consul)
 
 ## Installation
 
@@ -30,17 +33,14 @@ go build -o vega ./cmd/vega
 
 ```bash
 $ vega
-Vega - Virtual Execution & Graph Abstraction
-Type 'help' for available commands, 'quit' to exit.
-
-vega> println("Hello, World!")
-Hello, World!
-vega> x = 42
-vega> println(x * 2)
-84
-vega> quit
-Goodbye!
 ```
+
+The TUI REPL provides:
+- Command history with search (Ctrl+R)
+- Tab completion for keywords and built-ins
+- Scrollable output (mouse wheel)
+- Bytecode disassembly panel (Ctrl+D)
+- Multiline input (auto-detected by brace matching)
 
 ### Execute a Command
 
@@ -52,6 +52,21 @@ vega -c 'println("Hello from Vega!")'
 
 ```bash
 vega script.vega
+# or explicitly:
+vega -s script.vega
+```
+
+### With VFS Mount
+
+```bash
+# Mount ephemeral (in-memory) filesystem
+vega ephemeral://
+
+# Mount local directory
+vega file:///path/to/dir
+
+# Mount SQLite database
+vega sqlite:///path/to/db.sqlite
 ```
 
 ## Language Guide
@@ -218,8 +233,15 @@ x = 42  # inline comment
 |----------|-------------|
 | `print(args...)` | Print without newline |
 | `println(args...)` | Print with newline |
-| `input()` | Read line from stdin |
-| `input(prompt)` | Print prompt, read line |
+| `input([prompt])` | Read line from stdin, optionally print prompt |
+
+### Streams
+
+| Function | Description |
+|----------|-------------|
+| `stdin()` | Get stdin as a stream |
+| `stdout()` | Get stdout as a stream |
+| `stderr()` | Get stderr as a stream |
 
 ### Type Conversion
 
@@ -227,69 +249,178 @@ x = 42  # inline comment
 |----------|-------------|
 | `type(value)` | Get type name as string |
 | `string(value)` | Convert to string |
-| `int(value)` | Convert to integer |
+| `integer(value)` | Convert to integer |
 | `float(value)` | Convert to float |
-| `bool(value)` | Convert to boolean |
-
-### Collections
-
-| Function | Description |
-|----------|-------------|
-| `len(x)` | Length of string, array, or map |
-| `push(arr, val)` | Append to array |
-| `pop(arr)` | Remove and return last element |
-| `keys(map)` | Get array of map keys |
-| `range(n)` | Array [0, 1, ..., n-1] |
-| `range(start, end)` | Array [start, ..., end-1] |
-
-### Strings
-
-| Function | Description |
-|----------|-------------|
-| `upper(s)` | Convert to uppercase |
-| `lower(s)` | Convert to lowercase |
-| `trim(s)` | Remove leading/trailing whitespace |
-| `split(s, sep)` | Split string into array |
-| `join(arr, sep)` | Join array into string |
-| `contains(s, sub)` | Check if contains substring |
-| `startswith(s, pre)` | Check prefix |
-| `endswith(s, suf)` | Check suffix |
-| `replace(s, old, new)` | Replace all occurrences |
-| `index(s, sub)` | Find index of substring (-1 if not found) |
+| `boolean(value)` | Convert to boolean |
 
 ### Utility
 
 | Function | Description |
 |----------|-------------|
+| `range(n)` | Array [0, 1, ..., n-1] |
+| `range(start, end)` | Array [start, ..., end-1] |
 | `assert(cond)` | Error if condition is false |
 | `assert(cond, msg)` | Error with message if false |
+
+### VFS Operations
+
+| Function | Description |
+|----------|-------------|
+| `read(path[, offset, size])` | Read file contents |
+| `write(path, data[, offset])` | Write data to file, returns bytes written |
+| `stat(path)` | Get file metadata |
+| `lookup(path)` | Check if path exists (returns boolean) |
+| `readdir(path)` | List directory contents (array of metadata) |
+| `createdir(path)` | Create directory |
+| `remdir(path[, force])` | Remove directory |
+| `unlink(path)` | Delete file |
+| `rename(old, new)` | Rename/move file or directory |
+| `open(path[, mode])` | Open file stream (modes: "r", "w", "a", "rw", "wx") |
+| `exec(cmd, args...)` | Execute VFS command, returns exit code |
+| `sexec(cmd, args...)` | Execute with stdin/stdout/stderr streams |
+| `capture(cmd, args...)` | Execute and capture output as string |
+| `etag(path[, size])` | Calculate or retrieve file ETag |
+
+## Type Methods
+
+Values support method calls using dot notation (e.g., `str.upper()`).
+
+### Universal Methods (All Types)
+
+These methods are available on all value types:
+
+| Method | Description |
+|--------|-------------|
+| `v.string()` | Convert value to string |
+| `v.type()` | Get type name |
+| `v.boolean()` | Convert to boolean (truthy/falsy) |
+| `v.equal(other)` | Check equality with another value |
+| `v.compare(other)` | Compare values (-1, 0, 1) for comparable types |
+
+### String Methods
+
+| Method | Description |
+|--------|-------------|
+| `s.length()` | Get string length |
+| `s.upper()` | Convert to uppercase |
+| `s.lower()` | Convert to lowercase |
+| `s.trim()` | Remove leading/trailing whitespace |
+| `s.split(sep)` | Split into array |
+| `s.contains(sub)` | Check if contains substring |
+| `s.startswith(prefix)` | Check prefix |
+| `s.endswith(suffix)` | Check suffix |
+| `s.replace(old, new)` | Replace all occurrences |
+| `s.index(sub)` | Find index of substring (-1 if not found) |
+
+### Array Methods
+
+| Method | Description |
+|--------|-------------|
+| `arr.length()` | Get array length |
+| `arr.push(val)` | Append value to array |
+| `arr.pop()` | Remove and return last element |
+| `arr.join(sep)` | Join elements into string |
+| `arr.contains(val)` | Check if array contains value |
+| `arr.index(val)` | Find index of value (-1 if not found) |
+
+### Map Methods
+
+| Method | Description |
+|--------|-------------|
+| `m.length()` | Get number of key-value pairs |
+| `m.keys()` | Get array of keys |
+
+### Stream Methods
+
+Streams are returned by `open()`, `stdin()`, `stdout()`, `stderr()`.
+
+| Method | Description |
+|--------|-------------|
+| `stream.canread()` | Check if stream is readable |
+| `stream.canwrite()` | Check if stream is writable |
+| `stream.isclosed()` | Check if stream is closed |
+| `stream.read()` | Read all available data |
+| `stream.readln()` | Read a single line |
+| `stream.readn(n)` | Read n bytes |
+| `stream.write(data)` | Write data, returns bytes written |
+| `stream.writeln(data)` | Write data with newline |
+| `stream.copy(dest)` | Copy all data to destination stream |
+| `stream.flush()` | Flush buffered data |
+| `stream.close()` | Close the stream |
+
+### Metadata Fields
+
+Metadata values (from `stat()`, `readdir()`) support field access via indexing:
+
+```vega
+meta = stat("/file.txt")
+println(meta["key"])      # file path
+println(meta["size"])     # file size
+println(meta["isdir"])    # is directory?
+```
+
+| Field | Description |
+|-------|-------------|
+| `id` | Unique identifier |
+| `key` | File path |
+| `mode` | Permission mode |
+| `size` | File size in bytes |
+| `accesstime` | Last access time (RFC3339) |
+| `modifytime` | Last modification time (RFC3339) |
+| `createtime` | Creation time (RFC3339) |
+| `uid` | Owner user ID |
+| `gid` | Owner group ID |
+| `contenttype` | MIME content type |
+| `etag` | Entity tag |
+| `filetype` | Type string ("file", "dir", etc.) |
+| `isdir` | Is directory (boolean) |
+| `isfile` | Is regular file (boolean) |
+| `ismount` | Is mount point (boolean) |
+| `issymlink` | Is symbolic link (boolean) |
+| `attributes` | Extended attributes (map) |
 
 ## CLI Reference
 
 ```
 Usage:
-  vega                    Start interactive REPL
-  vega <script.vega>      Execute a script file
-  vega -c '<code>'        Execute a single command
-  vega -S <script.vega>   Execute a script file (explicit)
+  vega [uri]               Start REPL with optional VFS mount (default: ephemeral://)
+  vega -s <script.vega>    Execute a script file
+  vega -c '<code>'         Execute a single command
 
 Flags:
   -c string       Execute a single Vega command
-  -S string       Execute a Vega script file
-  -disasm         Show disassembled bytecode (debug)
-  -version        Show version information
-  -help           Show help message
+  -s string       Execute a Vega script file
+  -i              Keep REPL open after executing script/command
+  -d              Show disassembled bytecode (debug)
+  --version       Show version information
+  --help          Show help message
 ```
 
 ## REPL Commands
 
 | Command | Description |
 |---------|-------------|
-| `help` | Show available commands |
+| `help` or `?` | Show available commands |
 | `quit` | Exit the REPL |
 | `exit` | Exit the REPL |
 | `history` | Show command history |
 | `clear` | Clear the screen |
+| `vars` | Show defined variables |
+
+## REPL Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+R` | Search command history |
+| `Ctrl+L` | Clear screen |
+| `Ctrl+O` | Toggle expression result display |
+| `Ctrl+D` | Toggle bytecode disassembly panel |
+| `Ctrl+U` | Clear current line |
+| `Ctrl+K` | Kill to end of line |
+| `Ctrl+C` | Interrupt execution or quit |
+| `Tab` | Autocomplete |
+| `Up/Down` | Navigate history |
+| `Mouse wheel` | Scroll output |
 
 The REPL supports multiline input. Lines ending with `{` continue on the next line until braces are balanced.
 
@@ -347,58 +478,25 @@ for word in words {
 println("Occurrences of 'the': " + string(count))
 ```
 
-### Simple Calculator
+### VFS File Operations
 
 ```vega
-fn calculate(a, op, b) {
-    if op == "+" {
-        return a + b
-    }
-    if op == "-" {
-        return a - b
-    }
-    if op == "*" {
-        return a * b
-    }
-    if op == "/" {
-        return a / b
-    }
-    return nil
+# Write a file
+write("/hello.txt", "Hello, World!")
+
+# Read it back
+content = read("/hello.txt")
+println(content)
+
+# List directory
+files = readdir("/")
+for f in files {
+    println(f)
 }
 
-println(calculate(10, "+", 5))   # 15
-println(calculate(10, "*", 3))   # 30
-```
-
-### Array Operations
-
-```vega
-numbers = [5, 2, 8, 1, 9, 3]
-
-# Find max
-max = numbers[0]
-for n in numbers {
-    if n > max {
-        max = n
-    }
-}
-println("Max: " + string(max))
-
-# Sum
-sum = 0
-for n in numbers {
-    sum = sum + n
-}
-println("Sum: " + string(sum))
-
-# Filter even numbers
-evens = []
-for n in numbers {
-    if n % 2 == 0 {
-        push(evens, n)
-    }
-}
-println("Evens: " + string(evens))
+# Get file metadata
+meta = stat("/hello.txt")
+println("Size: " + string(meta["size"]))
 ```
 
 ## Architecture
@@ -415,7 +513,7 @@ Source Code → Lexer → Tokens → Parser → AST → Compiler → Bytecode �
 | Parser | `pkg/parser` | Builds Abstract Syntax Tree |
 | Compiler | `pkg/compiler` | Generates bytecode |
 | VM | `pkg/vm` | Stack-based bytecode interpreter |
-| REPL | `pkg/repl` | Interactive shell |
+| REPL | `pkg/repl` | TUI-based interactive shell |
 
 ## License
 
