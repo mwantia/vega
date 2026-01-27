@@ -16,28 +16,13 @@ func (vm *VirtualMachine) registerBuiltinFunctions() {
 	vm.builtins["print"] = newBuiltinPrintFunction
 	vm.builtins["println"] = newBuiltinPrintlnFunction
 	vm.builtins["input"] = newBuiltinInputFunction
+	vm.builtins["etag"] = newBuiltinEtagFunction
 	// Type-Declaration Functions
 	vm.builtins["type"] = newBuiltinTypeFunction
 	vm.builtins["string"] = newBuiltinStringFunction
-	vm.builtins["int"] = newBuiltinIntFunction
+	vm.builtins["integer"] = newBuiltinIntegerFunction
 	vm.builtins["float"] = newBuiltinFloatFunction
-	vm.builtins["bool"] = newBuiltinBoolFunction
-	// Collection Functions
-	vm.builtins["len"] = newBuiltinLenFunction
-	vm.builtins["push"] = newBuiltinPushFunction
-	vm.builtins["pop"] = newBuiltinPopFunction
-	vm.builtins["keys"] = newBuiltinKeysFunction
-	// String Functions
-	vm.builtins["upper"] = newBuiltinUpperFunction
-	vm.builtins["lower"] = newBuiltinLowerFunction
-	vm.builtins["trim"] = newBuiltinTrimFunction
-	vm.builtins["split"] = newBuiltinSplitFunction
-	vm.builtins["join"] = newBuiltinJoinFunction
-	vm.builtins["contains"] = newBuiltinContainsFunction
-	vm.builtins["startswith"] = newBuiltinStartsWithFunction
-	vm.builtins["endswith"] = newBuiltinEndsWithFunction
-	vm.builtins["replace"] = newBuiltinReplaceFunction
-	vm.builtins["index"] = newBuiltinIndexFunction
+	vm.builtins["boolean"] = newBuiltinBooleanFunction
 	// Utility Functions
 	vm.builtins["range"] = newBuiltinRangeFunction
 	vm.builtins["assert"] = newBuiltinAssertFunction

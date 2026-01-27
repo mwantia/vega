@@ -2,28 +2,13 @@ package vm
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/mwantia/vega/pkg/value"
 	"github.com/mwantia/vfs/data"
 )
-
-// metadataToMap converts VFS metadata to a Vega map value.
-func metadataToMap(meta data.Metadata) *value.MapValue {
-	m := value.NewMap()
-	m.Set("key", value.NewString(meta.Key))
-	m.Set("size", value.NewInt(meta.Size))
-	m.Set("isdir", value.NewBool(meta.Mode.IsDir()))
-	m.Set("type", value.NewString(string(meta.GetType())))
-	m.Set("modified", value.NewString(meta.ModifyTime.Format(time.RFC3339)))
-	m.Set("created", value.NewString(meta.CreateTime.Format(time.RFC3339)))
-	m.Set("contenttype", value.NewString(string(meta.ContentType)))
-	return m
-}
 
 // read(path) or read(path, offset, size) - reads file content
 func newBuiltinReadFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
@@ -34,7 +19,7 @@ func newBuiltinReadFunction(vm *VirtualMachine, args []value.Value) (value.Value
 		return nil, fmt.Errorf("read expects at least 1 argument (path), got %d", len(args))
 	}
 
-	path, ok := args[0].(*value.StringValue)
+	path, ok := args[0].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("read expects string path, got %s", args[0].Type())
 	}
@@ -42,17 +27,17 @@ func newBuiltinReadFunction(vm *VirtualMachine, args []value.Value) (value.Value
 	// Optional offset and size
 	var offset, size int64 = 0, -1
 	if len(args) >= 2 {
-		if v, ok := args[1].(*value.IntValue); ok {
-			offset = v.Val
+		if v, ok := args[1].(*value.Integer); ok {
+			offset = v.Value
 		}
 	}
 	if len(args) >= 3 {
-		if v, ok := args[2].(*value.IntValue); ok {
-			size = v.Val
+		if v, ok := args[2].(*value.Integer); ok {
+			size = v.Value
 		}
 	}
 
-	content, err := vm.vfs.ReadFile(context.Background(), path.Val, offset, size)
+	content, err := vm.vfs.ReadFile(vm.Context(), path.Value, offset, size)
 	if err != nil {
 		return nil, fmt.Errorf("read failed: %w", err)
 	}
@@ -69,7 +54,7 @@ func newBuiltinWriteFunction(vm *VirtualMachine, args []value.Value) (value.Valu
 		return nil, fmt.Errorf("write expects at least 2 arguments (path, data), got %d", len(args))
 	}
 
-	path, ok := args[0].(*value.StringValue)
+	path, ok := args[0].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("write expects string path, got %s", args[0].Type())
 	}
@@ -79,20 +64,20 @@ func newBuiltinWriteFunction(vm *VirtualMachine, args []value.Value) (value.Valu
 	// Optional offset
 	var offset int64 = 0
 	if len(args) >= 3 {
-		if v, ok := args[2].(*value.IntValue); ok {
-			offset = v.Val
+		if v, ok := args[2].(*value.Integer); ok {
+			offset = v.Value
 		}
 	}
 
-	n, err := vm.vfs.WriteFile(context.Background(), path.Val, offset, []byte(content))
+	n, err := vm.vfs.WriteFile(vm.Context(), path.Value, offset, []byte(content))
 	if err != nil {
 		return nil, fmt.Errorf("write failed: %w", err)
 	}
 
-	return value.NewInt(int64(n)), nil
+	return value.NewInteger(int64(n)), nil
 }
 
-// stat(path) - returns file metadata as a map
+// stat(path) - returns file metadata
 func newBuiltinStatFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
 	if vm.vfs == nil {
 		return nil, fmt.Errorf("no VFS attached")
@@ -101,17 +86,17 @@ func newBuiltinStatFunction(vm *VirtualMachine, args []value.Value) (value.Value
 		return nil, fmt.Errorf("stat expects 1 argument (path), got %d", len(args))
 	}
 
-	path, ok := args[0].(*value.StringValue)
+	path, ok := args[0].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("stat expects string path, got %s", args[0].Type())
 	}
 
-	meta, err := vm.vfs.StatMetadata(context.Background(), path.Val)
+	meta, err := vm.vfs.StatMetadata(vm.Context(), path.Value)
 	if err != nil {
 		return nil, fmt.Errorf("stat failed: %w", err)
 	}
 
-	return metadataToMap(meta), nil
+	return value.NewMetadata(meta), nil
 }
 
 // lookup(path) - checks if path exists, returns bool
@@ -123,20 +108,20 @@ func newBuiltinLookupFunction(vm *VirtualMachine, args []value.Value) (value.Val
 		return nil, fmt.Errorf("lookup expects 1 argument (path), got %d", len(args))
 	}
 
-	path, ok := args[0].(*value.StringValue)
+	path, ok := args[0].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("lookup expects string path, got %s", args[0].Type())
 	}
 
-	exists, err := vm.vfs.LookupMetadata(context.Background(), path.Val)
+	exists, err := vm.vfs.LookupMetadata(vm.Context(), path.Value)
 	if err != nil {
 		return nil, fmt.Errorf("lookup failed: %w", err)
 	}
 
-	return value.NewBool(exists), nil
+	return value.NewBoolean(exists), nil
 }
 
-// readdir(path) - returns array of metadata maps for directory entries
+// readdir(path) - returns array of metadata values for directory entries
 func newBuiltinReaddirFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
 	if vm.vfs == nil {
 		return nil, fmt.Errorf("no VFS attached")
@@ -145,19 +130,19 @@ func newBuiltinReaddirFunction(vm *VirtualMachine, args []value.Value) (value.Va
 		return nil, fmt.Errorf("readdir expects 1 argument (path), got %d", len(args))
 	}
 
-	path, ok := args[0].(*value.StringValue)
+	path, ok := args[0].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("readdir expects string path, got %s", args[0].Type())
 	}
 
-	entries, err := vm.vfs.ReadDirectory(context.Background(), path.Val)
+	entries, err := vm.vfs.ReadDirectory(vm.Context(), path.Value)
 	if err != nil {
 		return nil, fmt.Errorf("readdir failed: %w", err)
 	}
 
 	elements := make([]value.Value, len(entries))
 	for i, entry := range entries {
-		elements[i] = metadataToMap(entry)
+		elements[i] = value.NewMetadata(entry)
 	}
 
 	return value.NewArray(elements), nil
@@ -172,12 +157,12 @@ func newBuiltinCreatedirFunction(vm *VirtualMachine, args []value.Value) (value.
 		return nil, fmt.Errorf("createdir expects 1 argument (path), got %d", len(args))
 	}
 
-	path, ok := args[0].(*value.StringValue)
+	path, ok := args[0].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("createdir expects string path, got %s", args[0].Type())
 	}
 
-	if err := vm.vfs.CreateDirectory(context.Background(), path.Val); err != nil {
+	if err := vm.vfs.CreateDirectory(vm.Context(), path.Value); err != nil {
 		return nil, fmt.Errorf("createdir failed: %w", err)
 	}
 
@@ -193,19 +178,19 @@ func newBuiltinRemdirFunction(vm *VirtualMachine, args []value.Value) (value.Val
 		return nil, fmt.Errorf("remdir expects at least 1 argument (path), got %d", len(args))
 	}
 
-	path, ok := args[0].(*value.StringValue)
+	path, ok := args[0].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("remdir expects string path, got %s", args[0].Type())
 	}
 
 	force := false
 	if len(args) >= 2 {
-		if v, ok := args[1].(*value.BoolValue); ok {
-			force = v.Val
+		if v, ok := args[1].(*value.Boolean); ok {
+			force = v.Value
 		}
 	}
 
-	if err := vm.vfs.RemoveDirectory(context.Background(), path.Val, force); err != nil {
+	if err := vm.vfs.RemoveDirectory(vm.Context(), path.Value, force); err != nil {
 		return nil, fmt.Errorf("remdir failed: %w", err)
 	}
 
@@ -221,12 +206,12 @@ func newBuiltinUnlinkFunction(vm *VirtualMachine, args []value.Value) (value.Val
 		return nil, fmt.Errorf("unlink expects 1 argument (path), got %d", len(args))
 	}
 
-	path, ok := args[0].(*value.StringValue)
+	path, ok := args[0].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("unlink expects string path, got %s", args[0].Type())
 	}
 
-	if err := vm.vfs.UnlinkFile(context.Background(), path.Val); err != nil {
+	if err := vm.vfs.UnlinkFile(vm.Context(), path.Value); err != nil {
 		return nil, fmt.Errorf("unlink failed: %w", err)
 	}
 
@@ -242,17 +227,17 @@ func newBuiltinRenameFunction(vm *VirtualMachine, args []value.Value) (value.Val
 		return nil, fmt.Errorf("rename expects 2 arguments (oldpath, newpath), got %d", len(args))
 	}
 
-	oldPath, ok := args[0].(*value.StringValue)
+	oldPath, ok := args[0].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("rename expects string oldpath, got %s", args[0].Type())
 	}
 
-	newPath, ok := args[1].(*value.StringValue)
+	newPath, ok := args[1].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("rename expects string newpath, got %s", args[1].Type())
 	}
 
-	if err := vm.vfs.Rename(context.Background(), oldPath.Val, newPath.Val); err != nil {
+	if err := vm.vfs.Rename(vm.Context(), oldPath.Value, newPath.Value); err != nil {
 		return nil, fmt.Errorf("rename failed: %w", err)
 	}
 
@@ -290,7 +275,7 @@ func newBuiltinOpenFunction(vm *VirtualMachine, args []value.Value) (value.Value
 		return nil, fmt.Errorf("open expects 1-2 arguments (path [, mode]), got %d", len(args))
 	}
 
-	path, ok := args[0].(*value.StringValue)
+	path, ok := args[0].(*value.String)
 	if !ok {
 		return nil, fmt.Errorf("open expects string path, got %s", args[0].Type())
 	}
@@ -298,11 +283,11 @@ func newBuiltinOpenFunction(vm *VirtualMachine, args []value.Value) (value.Value
 	// Default mode is read
 	mode := "r"
 	if len(args) >= 2 {
-		modeVal, ok := args[1].(*value.StringValue)
+		modeVal, ok := args[1].(*value.String)
 		if !ok {
 			return nil, fmt.Errorf("open expects string mode, got %s", args[1].Type())
 		}
-		mode = modeVal.Val
+		mode = modeVal.Value
 	}
 
 	flags, err := parseAccessMode(mode)
@@ -310,7 +295,7 @@ func newBuiltinOpenFunction(vm *VirtualMachine, args []value.Value) (value.Value
 		return nil, fmt.Errorf("open: %w", err)
 	}
 
-	streamer, err := vm.vfs.OpenFile(context.Background(), path.Val, flags)
+	streamer, err := vm.vfs.OpenFile(vm.Context(), path.Value, flags)
 	if err != nil {
 		return nil, fmt.Errorf("open failed: %w", err)
 	}
@@ -326,7 +311,7 @@ func newBuiltinOpenFunction(vm *VirtualMachine, args []value.Value) (value.Value
 		writer = streamer
 	}
 
-	return value.NewStream(path.Val, reader, writer, streamer), nil
+	return value.NewStream(path.Value, reader, writer, streamer), nil
 }
 
 // exec(command...) - executes a VFS command and returns exit code
@@ -345,12 +330,12 @@ func newBuiltinExecFunction(vm *VirtualMachine, args []value.Value) (value.Value
 		cmdArgs[i] = arg.String()
 	}
 
-	exitCode, err := vm.vfs.Execute(context.Background(), vm.stdout, cmdArgs...)
+	exitCode, err := vm.vfs.Execute(vm.Context(), vm.stdout, cmdArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("exec failed: %w", err)
 	}
 
-	return value.NewInt(int64(exitCode)), nil
+	return value.NewInteger(int64(exitCode)), nil
 }
 
 // sexec(command...) - executes a VFS command with VM's stdin/stdout/stderr
@@ -369,12 +354,12 @@ func newBuiltinSexecFunction(vm *VirtualMachine, args []value.Value) (value.Valu
 		cmdArgs[i] = arg.String()
 	}
 
-	exitCode, err := vm.vfs.ExecuteWithStreams(context.Background(), vm.stdin, vm.stdout, vm.stderr, cmdArgs...)
+	exitCode, err := vm.vfs.ExecuteWithStreams(vm.Context(), vm.stdin, vm.stdout, vm.stderr, cmdArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("sexec failed: %w", err)
 	}
 
-	return value.NewInt(int64(exitCode)), nil
+	return value.NewInteger(int64(exitCode)), nil
 }
 
 // capture(command...) - executes a VFS command and returns output as string
@@ -394,7 +379,7 @@ func newBuiltinCaptureFunction(vm *VirtualMachine, args []value.Value) (value.Va
 
 	// Capture output to buffer
 	var buf bytes.Buffer
-	_, err := vm.vfs.Execute(context.Background(), &buf, cmdArgs...)
+	_, err := vm.vfs.Execute(vm.Context(), &buf, cmdArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("capture failed: %w", err)
 	}

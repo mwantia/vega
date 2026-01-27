@@ -8,8 +8,8 @@ import (
 	"sync"
 )
 
-// StreamValue represents an I/O stream (stdin, stdout, file handle, etc.)
-type StreamValue struct {
+// Stream represents an I/O stream (stdin, stdout, file handle, etc.)
+type Stream struct {
 	name     string
 	reader   io.Reader
 	writer   io.Writer
@@ -21,9 +21,11 @@ type StreamValue struct {
 	mu       sync.Mutex
 }
 
+var _ Methodable = (*Stream)(nil)
+
 // NewInputStream creates a read-only stream.
-func NewInputStream(name string, r io.Reader) *StreamValue {
-	return &StreamValue{
+func NewInputStream(name string, r io.Reader) *Stream {
+	return &Stream{
 		name:     name,
 		reader:   r,
 		bufRead:  bufio.NewReader(r),
@@ -33,8 +35,8 @@ func NewInputStream(name string, r io.Reader) *StreamValue {
 }
 
 // NewOutputStream creates a write-only stream.
-func NewOutputStream(name string, w io.Writer) *StreamValue {
-	return &StreamValue{
+func NewOutputStream(name string, w io.Writer) *Stream {
+	return &Stream{
 		name:     name,
 		writer:   w,
 		canRead:  false,
@@ -43,8 +45,8 @@ func NewOutputStream(name string, w io.Writer) *StreamValue {
 }
 
 // NewStream creates a stream with custom read/write capabilities.
-func NewStream(name string, r io.Reader, w io.Writer, c io.Closer) *StreamValue {
-	s := &StreamValue{
+func NewStream(name string, r io.Reader, w io.Writer, c io.Closer) *Stream {
+	s := &Stream{
 		name:     name,
 		reader:   r,
 		writer:   w,
@@ -59,12 +61,12 @@ func NewStream(name string, r io.Reader, w io.Writer, c io.Closer) *StreamValue 
 }
 
 // Type returns "stream".
-func (s *StreamValue) Type() string {
+func (s *Stream) Type() string {
 	return TypeStream
 }
 
 // String returns a string representation.
-func (s *StreamValue) String() string {
+func (s *Stream) String() string {
 	status := ""
 	if s.closed {
 		status = " (closed)"
@@ -73,42 +75,112 @@ func (s *StreamValue) String() string {
 }
 
 // Boolean returns true if the stream is open.
-func (s *StreamValue) Boolean() bool {
+func (s *Stream) Boolean() bool {
 	return !s.closed
 }
 
 // Equal compares two streams by identity.
-func (s *StreamValue) Equal(other Value) bool {
-	if o, ok := other.(*StreamValue); ok {
+func (s *Stream) Equal(other Value) bool {
+	if o, ok := other.(*Stream); ok {
 		return s == o
 	}
 	return false
 }
 
+func (v *Stream) Method(name string, args []Value) (Value, error) {
+	switch name {
+	case "canread":
+		// returns true if the stream supports reading
+		return NewBoolean(v.CanRead()), nil
+	case "canwrite":
+		// returns true if the stream supports writing
+		return NewBoolean(v.CanWrite()), nil
+	case "isclosed":
+		// returns true if the stream is closed
+		return NewBoolean(v.IsClosed()), nil
+	case "read":
+		// reads all available data from the stream
+		return v.Read()
+	case "write":
+		// writes data to the stream
+		if len(args) != 1 {
+			return nil, fmt.Errorf("method '%s' expects 1 arguments, got %d", name, len(args))
+		}
+		return v.Write(args[0])
+	case "readln":
+		// reads a single line from the stream
+		return v.ReadLine()
+	case "writeln":
+		// writes data followed by a newline
+		if len(args) != 1 {
+			return nil, fmt.Errorf("method '%s' expects 1 arguments, got %d", name, len(args))
+		}
+		return v.WriteLine(args[0])
+	case "readn":
+		// reads n bytes from the stream
+		if len(args) != 1 {
+			return nil, fmt.Errorf("method '%s' expects 1 arguments, got %d", name, len(args))
+		}
+		if i, ok := args[0].(*Integer); ok {
+			n := int(i.Value)
+			return v.ReadN(n)
+		}
+		return nil, fmt.Errorf("method '%s' first argument must be 'int', got '%s'", name, args[0].Type())
+	case "copy":
+		// copy all data from this stream to dest stream
+		if len(args) != 1 {
+			return nil, fmt.Errorf("method '%s' expects 1 arguments, got %d", name, len(args))
+		}
+		dest, ok := args[0].(*Stream)
+		if !ok {
+			return nil, fmt.Errorf("method '%s' first argument must be 'stream', got '%s'", name, args[0].Type())
+		}
+		if !v.CanRead() {
+			return nil, fmt.Errorf("source stream is not readable")
+		}
+		if !dest.CanWrite() {
+			return nil, fmt.Errorf("destination stream is not writable")
+		}
+		n, err := io.Copy(dest.Writer(), v.Reader())
+		if err != nil {
+			return nil, fmt.Errorf("copy failed: %w", err)
+		}
+		return NewInteger(n), nil
+	case "flush":
+		// flushes any buffered data
+		return NewNil(), v.Flush()
+	case "close":
+		// closes the stream
+		return NewNil(), v.Close()
+	}
+
+	return nil, fmt.Errorf("unknown method-map: '%s'", name)
+}
+
 // Name returns the stream name.
-func (s *StreamValue) Name() string {
+func (s *Stream) Name() string {
 	return s.name
 }
 
 // CanRead returns true if the stream supports reading.
-func (s *StreamValue) CanRead() bool {
+func (s *Stream) CanRead() bool {
 	return s.canRead && !s.closed
 }
 
 // CanWrite returns true if the stream supports writing.
-func (s *StreamValue) CanWrite() bool {
+func (s *Stream) CanWrite() bool {
 	return s.canWrite && !s.closed
 }
 
 // IsClosed returns true if the stream is closed.
-func (s *StreamValue) IsClosed() bool {
+func (s *Stream) IsClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
 }
 
 // Read reads all available data from the stream.
-func (s *StreamValue) Read() (Value, error) {
+func (s *Stream) Read() (Value, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -127,7 +199,7 @@ func (s *StreamValue) Read() (Value, error) {
 }
 
 // ReadLine reads a single line from the stream.
-func (s *StreamValue) ReadLine() (Value, error) {
+func (s *Stream) ReadLine() (Value, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -162,7 +234,7 @@ func (s *StreamValue) ReadLine() (Value, error) {
 }
 
 // ReadN reads n bytes from the stream.
-func (s *StreamValue) ReadN(n int) (Value, error) {
+func (s *Stream) ReadN(n int) (Value, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -183,7 +255,7 @@ func (s *StreamValue) ReadN(n int) (Value, error) {
 }
 
 // Write writes data to the stream.
-func (s *StreamValue) Write(data Value) (Value, error) {
+func (s *Stream) Write(data Value) (Value, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -200,11 +272,11 @@ func (s *StreamValue) Write(data Value) (Value, error) {
 		return Nil, err
 	}
 
-	return NewInt(int64(n)), nil
+	return NewInteger(int64(n)), nil
 }
 
 // WriteLine writes data followed by a newline.
-func (s *StreamValue) WriteLine(data Value) (Value, error) {
+func (s *Stream) WriteLine(data Value) (Value, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -221,11 +293,11 @@ func (s *StreamValue) WriteLine(data Value) (Value, error) {
 		return Nil, err
 	}
 
-	return NewInt(int64(n)), nil
+	return NewInteger(int64(n)), nil
 }
 
 // Close closes the stream.
-func (s *StreamValue) Close() error {
+func (s *Stream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -241,7 +313,7 @@ func (s *StreamValue) Close() error {
 }
 
 // Flush flushes any buffered data.
-func (s *StreamValue) Flush() error {
+func (s *Stream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -256,11 +328,11 @@ func (s *StreamValue) Flush() error {
 }
 
 // Reader returns the underlying reader (for piping).
-func (s *StreamValue) Reader() io.Reader {
+func (s *Stream) Reader() io.Reader {
 	return s.reader
 }
 
 // Writer returns the underlying writer (for piping).
-func (s *StreamValue) Writer() io.Writer {
+func (s *Stream) Writer() io.Writer {
 	return s.writer
 }

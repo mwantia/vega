@@ -56,33 +56,33 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 			}
 
 			interactive, _ := cmd.Flags().GetBool("interactive")
-			command, _ := cmd.Flags().GetString("command")
-			script, _ := cmd.Flags().GetString("script")
 			disasm, _ := cmd.Flags().GetBool("disasm")
 
 			var bytecode *compiler.Bytecode
 
-			if script != "" {
-				if command != "" {
-					return fmt.Errorf("failed to parse: Using --script together with --command is not supported")
-				}
-
+			if script, _ := cmd.Flags().GetString("script"); script != "" {
 				content, err := os.ReadFile(script)
 				if err != nil {
 					return fmt.Errorf("failed to read file: %w", err)
 				}
 
-				command = string(content)
+				bytecode, err = compile(string(content))
+				if err != nil {
+					return err
+				}
 			}
 
-			vm := createVM(fs)
-
-			if command != "" {
+			if command, _ := cmd.Flags().GetString("command"); command != "" {
 				bytecode, err = compile(command)
 				if err != nil {
 					return err
 				}
+			}
 
+			vm := createVM(ctx, fs)
+			defer vm.Shutdown()
+
+			if bytecode != nil {
 				if disasm {
 					fmt.Println(bytecode.Disassemble())
 					fmt.Println("--- Execution ---")
@@ -93,7 +93,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 					return fmt.Errorf("runtime error: %w", err)
 				}
 
-				vm.SetGlobal("exitcode", value.NewInt(int64(exitCode)))
+				vm.SetGlobal("exitcode", value.NewInteger(int64(exitCode)))
 				// If interactive is 'false' (default), close immediately to avoid running vega
 				if !interactive {
 					return fs.Shutdown(ctx)
@@ -101,9 +101,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 			}
 
 			defer fs.Shutdown(ctx)
-
-			repl := repl.NewWithVM(vm, os.Stdin, os.Stdout, os.Stderr, disasm)
-			return repl.Run(ctx)
+			return repl.RunTUI(vm, disasm)
 		},
 	}
 
@@ -112,7 +110,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 	cmd.Flags().StringP("command", "c", "", "Execute a single Vega command")
 	cmd.Flags().StringP("script", "s", "", "Execute a Vega script file")
 	cmd.Flags().BoolP("disasm", "d", false, "Show disassembled bytecode (debug)")
-
+	// Set version used by './vega version'
 	cmd.Version = fmt.Sprintf("%s.%s", info.Version, info.Commit)
 
 	return cmd
@@ -140,8 +138,9 @@ func compile(input string) (*compiler.Bytecode, error) {
 	return bytecode, nil
 }
 
-func createVM(fs vfs.VirtualFileSystem) *vm.VirtualMachine {
+func createVM(ctx context.Context, fs vfs.VirtualFileSystem) *vm.VirtualMachine {
 	v := vm.NewVirtualMachine()
+	v.SetContext(ctx)
 	v.SetVFS(fs)
 	v.SetStdout(os.Stdout)
 	v.SetStderr(os.Stderr)

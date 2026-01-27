@@ -2,9 +2,11 @@
 package vm
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/mwantia/vega/pkg/compiler"
 	"github.com/mwantia/vega/pkg/value"
@@ -18,11 +20,14 @@ const (
 
 // New creates a new VM.
 func NewVirtualMachine() *VirtualMachine {
+	ctx, cancel := context.WithCancel(context.Background())
 	vm := &VirtualMachine{
 		stack:      make([]value.Value, StackSize),
 		sp:         0,
 		globals:    make(map[string]value.Value),
 		builtins:   make(map[string]BuiltinFunc),
+		ctx:        ctx,
+		cancel:     cancel,
 		frames:     make([]*CallFrame, MaxFrames),
 		frameIndex: 0,
 		stdout:     os.Stdout,
@@ -75,6 +80,69 @@ func (vm *VirtualMachine) SetStderr(w io.Writer) error {
 	return nil
 }
 
+// SetContext sets the VM's context for cancellation and timeouts.
+// This replaces any existing context and creates a new cancellable child context.
+func (vm *VirtualMachine) SetContext(ctx context.Context) {
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+
+	// Cancel any existing context
+	if vm.cancel != nil {
+		vm.cancel()
+	}
+
+	// Create new cancellable context from the provided parent
+	vm.ctx, vm.cancel = context.WithCancel(ctx)
+}
+
+// Context returns the VM's current context.
+// This is safe to call from builtin functions.
+func (vm *VirtualMachine) Context() context.Context {
+	vm.mu.RLock()
+	defer vm.mu.RUnlock()
+
+	if vm.ctx == nil {
+		return context.Background()
+	}
+	return vm.ctx
+}
+
+// Cancel cancels the VM's context, which will interrupt any running operations.
+func (vm *VirtualMachine) Cancel() {
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+
+	if vm.cancel != nil {
+		vm.cancel()
+	}
+}
+
+// Shutdown gracefully shuts down the VM by cancelling its context.
+// This should be called when the VM is no longer needed.
+func (vm *VirtualMachine) Shutdown() {
+	vm.Cancel()
+}
+
+// Reset resets the VM state and creates a fresh context.
+// This is useful for running multiple scripts in sequence.
+func (vm *VirtualMachine) Reset() {
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+
+	// Cancel any existing context
+	if vm.cancel != nil {
+		vm.cancel()
+	}
+
+	// Create fresh context
+	vm.ctx, vm.cancel = context.WithCancel(context.Background())
+
+	// Reset execution state
+	vm.sp = 0
+	vm.frameIndex = 0
+	vm.iterators = make(map[string]value.Iterator)
+}
+
 // Run executes bytecode and returns the exit code.
 func (vm *VirtualMachine) Run(bytecode *compiler.Bytecode) (int, error) {
 	// Create initial frame
@@ -95,8 +163,8 @@ func (vm *VirtualMachine) Run(bytecode *compiler.Bytecode) (int, error) {
 
 	// Return exit code from stack if available
 	if vm.sp > 0 {
-		if intVal, ok := vm.stack[vm.sp-1].(*value.IntValue); ok {
-			return int(intVal.Val), nil
+		if intVal, ok := vm.stack[vm.sp-1].(*value.Integer); ok {
+			return int(intVal.Value), nil
 		}
 	}
 	return 0, nil
@@ -105,6 +173,14 @@ func (vm *VirtualMachine) Run(bytecode *compiler.Bytecode) (int, error) {
 // execute is the main execution loop.
 func (vm *VirtualMachine) execute() error {
 	for {
+		// Check for context cancellation
+		select {
+		case <-vm.Context().Done():
+			return vm.Context().Err()
+		default:
+			// Continue execution
+		}
+
 		frame := vm.frames[vm.frameIndex]
 		if frame.ip >= len(frame.bytecode.Instructions) {
 			// End of bytecode
@@ -177,8 +253,8 @@ func (vm *VirtualMachine) executeInstruction(instr compiler.Instruction, frame *
 	case compiler.OpAdd:
 		return vm.binaryOp(func(l, r value.Value) (value.Value, error) {
 			// Handle string concatenation
-			if ls, ok := l.(*value.StringValue); ok {
-				return value.NewString(ls.Val + vm.toString(r)), nil
+			if ls, ok := l.(*value.String); ok {
+				return value.NewString(ls.Value + vm.toString(r)), nil
 			}
 			if ln, ok := l.(value.Numeric); ok {
 				return ln.Add(r)
@@ -216,17 +292,17 @@ func (vm *VirtualMachine) executeInstruction(instr compiler.Instruction, frame *
 
 	case compiler.OpNot:
 		val := vm.pop()
-		vm.push(value.NewBool(!val.Boolean()))
+		vm.push(value.NewBoolean(!val.Boolean()))
 
 	case compiler.OpEq:
 		right := vm.pop()
 		left := vm.pop()
-		vm.push(value.NewBool(left.Equal(right)))
+		vm.push(value.NewBoolean(left.Equal(right)))
 
 	case compiler.OpNotEq:
 		right := vm.pop()
 		left := vm.pop()
-		vm.push(value.NewBool(!left.Equal(right)))
+		vm.push(value.NewBoolean(!left.Equal(right)))
 
 	case compiler.OpLt:
 		return vm.compareOp(func(cmp int) bool { return cmp < 0 })
@@ -243,12 +319,12 @@ func (vm *VirtualMachine) executeInstruction(instr compiler.Instruction, frame *
 	case compiler.OpAnd:
 		right := vm.pop()
 		left := vm.pop()
-		vm.push(value.NewBool(left.Boolean() && right.Boolean()))
+		vm.push(value.NewBoolean(left.Boolean() && right.Boolean()))
 
 	case compiler.OpOr:
 		right := vm.pop()
 		left := vm.pop()
-		vm.push(value.NewBool(left.Boolean() || right.Boolean()))
+		vm.push(value.NewBoolean(left.Boolean() || right.Boolean()))
 
 	case compiler.OpJmp:
 		frame.ip = instr.Arg
@@ -295,7 +371,7 @@ func (vm *VirtualMachine) executeInstruction(instr compiler.Instruction, frame *
 			pairs[i] = struct {
 				key string
 				val value.Value
-			}{key.(*value.StringValue).Val, val}
+			}{key.(*value.String).Value, val}
 		}
 		for _, p := range pairs {
 			m.Set(p.key, p.val)
@@ -432,7 +508,7 @@ func (vm *VirtualMachine) compareOp(fn func(int) bool) error {
 		if !ok {
 			return fmt.Errorf("cannot compare %s and %s", left.Type(), right.Type())
 		}
-		vm.push(value.NewBool(fn(cmp)))
+		vm.push(value.NewBoolean(fn(cmp)))
 		return nil
 	}
 	return fmt.Errorf("cannot compare %s", left.Type())
@@ -450,30 +526,33 @@ func (vm *VirtualMachine) getAttribute(obj value.Value, name string) (value.Valu
 			return v, nil
 		}
 		return nil, fmt.Errorf("namespace '%s' has no member '%s'", o.Name(), name)
-	case *value.MapValue:
+	case *value.Metadata:
+		// Get metadata field (e.g., meta.key, meta.size, meta.isDir)
+		return o.GetField(name)
+	case *value.Map:
 		if v, ok := o.Get(name); ok {
 			return v, nil
 		}
 		return value.Nil, nil
-	case *value.ArrayValue:
+	case *value.Array:
 		if name == "length" {
-			return value.NewInt(int64(o.Len())), nil
+			return value.NewInteger(int64(o.Len())), nil
 		}
-	case *value.StringValue:
+	case *value.String:
 		if name == "length" {
-			return value.NewInt(int64(len(o.Val))), nil
+			return value.NewInteger(int64(len(o.Value))), nil
 		}
-	case *value.StreamValue:
+	case *value.Stream:
 		// Stream properties
 		switch name {
 		case "name":
 			return value.NewString(o.Name()), nil
 		case "closed":
-			return value.NewBool(o.IsClosed()), nil
+			return value.NewBoolean(o.IsClosed()), nil
 		case "canRead":
-			return value.NewBool(o.CanRead()), nil
+			return value.NewBoolean(o.CanRead()), nil
 		case "canWrite":
-			return value.NewBool(o.CanWrite()), nil
+			return value.NewBoolean(o.CanWrite()), nil
 		}
 	}
 	return nil, fmt.Errorf("cannot get attribute '%s' from %s", name, obj.Type())
@@ -548,183 +627,53 @@ func (vm *VirtualMachine) callMethod(name string, argCount int) error {
 	}
 	// Then pop object
 	obj := vm.pop()
-
-	result, err := vm.invokeMethod(obj, name, args)
-	if err != nil {
-		return err
+	// prepare method name
+	methodName := strings.ToLower(strings.TrimSpace(name))
+	if methodName == "" {
+		return fmt.Errorf("empty method name defined: '%s'", name)
 	}
+
+	var result value.Value
+	// Execute general methods that all values support
+	// or that are supported based on interfaces (e.g. Comparable)
+	switch methodName {
+	case "string":
+		s := obj.String()
+		result = value.NewString(s)
+	case "type":
+		s := obj.Type()
+		result = value.NewType(s)
+	case "boolean":
+		b := obj.Boolean()
+		result = value.NewBoolean(b)
+	case "equal":
+		if len(args) != 1 {
+			return fmt.Errorf("method 'equal' expects 1 argument, got %d", len(args))
+		}
+		b := obj.Equal(args[0])
+		result = value.NewBoolean(b)
+	case "compare":
+		if len(args) != 1 {
+			return fmt.Errorf("method 'compare' expects 1 argument, got %d", len(args))
+		}
+		if compare, ok1 := obj.(value.Comparable); ok1 {
+			if i, ok2 := compare.Compare(args[0]); ok2 {
+				result = value.NewInteger(int64(i))
+			}
+		}
+	default:
+		if method, ok := obj.(value.Methodable); ok {
+			var err error
+			if result, err = method.Method(methodName, args); err != nil {
+				return fmt.Errorf("failed to call method '%s': %v", method, err)
+			}
+		} else {
+			return fmt.Errorf("unknown method call: '%s'", name)
+		}
+	}
+
 	vm.push(result)
 	return nil
-}
-
-func (vm *VirtualMachine) invokeMethod(obj value.Value, name string, args []value.Value) (value.Value, error) {
-	switch o := obj.(type) {
-	case *value.StreamValue:
-		return vm.streamMethod(o, name, args)
-	case *value.NamespaceValue:
-		return vm.namespaceMethod(o, name, args)
-	case *value.ArrayValue:
-		return vm.arrayMethod(o, name, args)
-	case *value.StringValue:
-		return vm.stringMethod(o, name, args)
-	case *value.MapValue:
-		return vm.mapMethod(o, name, args)
-	}
-	return nil, fmt.Errorf("cannot call method '%s' on %s", name, obj.Type())
-}
-
-func (vm *VirtualMachine) arrayMethod(arr *value.ArrayValue, name string, args []value.Value) (value.Value, error) {
-	switch name {
-	case "push":
-		if len(args) != 1 {
-			return nil, fmt.Errorf("push expects 1 argument")
-		}
-		arr.Push(args[0])
-		return value.Nil, nil
-	case "pop":
-		return arr.Pop()
-	case "length":
-		return value.NewInt(int64(arr.Len())), nil
-	default:
-		return nil, fmt.Errorf("unknown array method: %s", name)
-	}
-}
-
-func (vm *VirtualMachine) stringMethod(str *value.StringValue, name string, args []value.Value) (value.Value, error) {
-	switch name {
-	case "length":
-		return value.NewInt(int64(len(str.Val))), nil
-	case "upper":
-		return value.NewString(toUpper(str.Val)), nil
-	case "lower":
-		return value.NewString(toLower(str.Val)), nil
-	default:
-		return nil, fmt.Errorf("unknown string method: %s", name)
-	}
-}
-
-func (vm *VirtualMachine) mapMethod(m *value.MapValue, name string, args []value.Value) (value.Value, error) {
-	switch name {
-	case "keys":
-		keys := m.Keys()
-		elements := make([]value.Value, len(keys))
-		for i, k := range keys {
-			elements[i] = value.NewString(k)
-		}
-		return value.NewArray(elements), nil
-	case "length":
-		return value.NewInt(int64(m.Len())), nil
-	default:
-		return nil, fmt.Errorf("unknown map method: %s", name)
-	}
-}
-
-func (vm *VirtualMachine) streamMethod(s *value.StreamValue, name string, args []value.Value) (value.Value, error) {
-	switch name {
-	case "read":
-		// read() - read all available data
-		return s.Read()
-
-	case "readln":
-		// readln() - read one line
-		return s.ReadLine()
-
-	case "readn":
-		// readn(n) - read n bytes
-		if len(args) != 1 {
-			return nil, fmt.Errorf("readn expects 1 argument, got %d", len(args))
-		}
-		n, ok := args[0].(*value.IntValue)
-		if !ok {
-			return nil, fmt.Errorf("readn expects integer argument, got %s", args[0].Type())
-		}
-		return s.ReadN(int(n.Val))
-
-	case "write":
-		// write(data) - write data to stream
-		if len(args) != 1 {
-			return nil, fmt.Errorf("write expects 1 argument, got %d", len(args))
-		}
-		return s.Write(args[0])
-
-	case "writeln":
-		// writeln(data) - write data followed by newline
-		if len(args) != 1 {
-			return nil, fmt.Errorf("writeln expects 1 argument, got %d", len(args))
-		}
-		return s.WriteLine(args[0])
-
-	case "close":
-		// close() - close the stream
-		if err := s.Close(); err != nil {
-			return nil, err
-		}
-		return value.Nil, nil
-
-	case "isClosed":
-		// isClosed() - check if stream is closed
-		return value.NewBool(s.IsClosed()), nil
-
-	case "flush":
-		// flush() - flush buffered data
-		if err := s.Flush(); err != nil {
-			return nil, err
-		}
-		return value.Nil, nil
-
-	case "copy":
-		// copy(dest) - copy all data from this stream to dest stream
-		if len(args) != 1 {
-			return nil, fmt.Errorf("copy expects 1 argument (dest stream), got %d", len(args))
-		}
-		dest, ok := args[0].(*value.StreamValue)
-		if !ok {
-			return nil, fmt.Errorf("copy expects stream argument, got %s", args[0].Type())
-		}
-		if !s.CanRead() {
-			return nil, fmt.Errorf("source stream is not readable")
-		}
-		if !dest.CanWrite() {
-			return nil, fmt.Errorf("destination stream is not writable")
-		}
-		n, err := io.Copy(dest.Writer(), s.Reader())
-		if err != nil {
-			return nil, fmt.Errorf("copy failed: %w", err)
-		}
-		return value.NewInt(n), nil
-
-	default:
-		return nil, fmt.Errorf("unknown stream method: %s", name)
-	}
-}
-
-func (vm *VirtualMachine) namespaceMethod(ns *value.NamespaceValue, name string, args []value.Value) (value.Value, error) {
-	// Check if namespace has a registered method
-	if method, ok := ns.GetMethod(name); ok {
-		return method(args)
-	}
-	return nil, fmt.Errorf("namespace '%s' has no method '%s'", ns.Name(), name)
-}
-
-// Simple string case conversion (ASCII only for now)
-func toUpper(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'a' && c <= 'z' {
-			b[i] = c - 32
-		}
-	}
-	return string(b)
-}
-
-func toLower(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			b[i] = c + 32
-		}
-	}
-	return string(b)
 }
 
 // GetGlobal returns a global variable value.

@@ -1,7 +1,9 @@
 package vm
 
 import (
+	"context"
 	"io"
+	"sync"
 
 	"github.com/mwantia/vega/pkg/compiler"
 	"github.com/mwantia/vega/pkg/value"
@@ -14,6 +16,11 @@ type VirtualMachine struct {
 	sp       int // Stack pointer
 	globals  map[string]value.Value
 	builtins map[string]BuiltinFunc
+
+	// Context for cancellation and timeouts
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.RWMutex // Protects context access
 
 	// VFS integration
 	vfs libvfs.VirtualFileSystem

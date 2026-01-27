@@ -3,14 +3,16 @@ package value
 
 // Type constants for value types.
 const (
-	TypeString = "string"
-	TypeInt    = "int"
-	TypeFloat  = "float"
-	TypeBool   = "bool"
-	TypeNil    = "nil"
-	TypeArray  = "array"
-	TypeMap    = "map"
-	TypeStream = "stream"
+	TypeType     = "type"
+	TypeString   = "string"
+	TypeInt      = "integer"
+	TypeFloat    = "float"
+	TypeBool     = "boolean"
+	TypeNil      = "nil"
+	TypeArray    = "array"
+	TypeMap      = "map"
+	TypeStream   = "stream"
+	TypeMetadata = "metadata"
 )
 
 // Value represents a runtime value in Vega.
@@ -26,6 +28,13 @@ type Value interface {
 
 	// Equal returns true if this value equals another value.
 	Equal(other Value) bool
+}
+
+// Methodable values support extended method calls
+type Methodable interface {
+	Value
+	// Method calls an extended method and returns the result.
+	Method(name string, args []Value) (Value, error)
 }
 
 // Comparable values can be compared with < > <= >=

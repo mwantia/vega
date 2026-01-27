@@ -93,12 +93,12 @@ func TestIntegerArithmetic(t *testing.T) {
 		if !ok {
 			t.Fatalf("input %q: variable 'x' not found", tt.input)
 		}
-		intVal, ok := val.(*value.IntValue)
+		intVal, ok := val.(*value.Integer)
 		if !ok {
-			t.Fatalf("input %q: expected IntValue, got %T", tt.input, val)
+			t.Fatalf("input %q: expected Integer, got %T", tt.input, val)
 		}
-		if intVal.Val != tt.expected {
-			t.Errorf("input %q: expected %d, got %d", tt.input, tt.expected, intVal.Val)
+		if intVal.Value != tt.expected {
+			t.Errorf("input %q: expected %d, got %d", tt.input, tt.expected, intVal.Value)
 		}
 	}
 }
@@ -120,12 +120,12 @@ func TestFloatArithmetic(t *testing.T) {
 		if !ok {
 			t.Fatalf("input %q: variable 'x' not found", tt.input)
 		}
-		floatVal, ok := val.(*value.FloatValue)
+		floatVal, ok := val.(*value.Float)
 		if !ok {
-			t.Fatalf("input %q: expected FloatValue, got %T", tt.input, val)
+			t.Fatalf("input %q: expected Float, got %T", tt.input, val)
 		}
-		if floatVal.Val != tt.expected {
-			t.Errorf("input %q: expected %f, got %f", tt.input, tt.expected, floatVal.Val)
+		if floatVal.Value != tt.expected {
+			t.Errorf("input %q: expected %f, got %f", tt.input, tt.expected, floatVal.Value)
 		}
 	}
 }
@@ -155,12 +155,12 @@ func TestComparison(t *testing.T) {
 		if !ok {
 			t.Fatalf("input %q: variable 'x' not found", tt.input)
 		}
-		boolVal, ok := val.(*value.BoolValue)
+		boolVal, ok := val.(*value.Boolean)
 		if !ok {
-			t.Fatalf("input %q: expected BoolValue, got %T", tt.input, val)
+			t.Fatalf("input %q: expected Boolean, got %T", tt.input, val)
 		}
-		if boolVal.Val != tt.expected {
-			t.Errorf("input %q: expected %v, got %v", tt.input, tt.expected, boolVal.Val)
+		if boolVal.Value != tt.expected {
+			t.Errorf("input %q: expected %v, got %v", tt.input, tt.expected, boolVal.Value)
 		}
 	}
 }
@@ -186,12 +186,12 @@ func TestLogicalOperators(t *testing.T) {
 		if !ok {
 			t.Fatalf("input %q: variable 'x' not found", tt.input)
 		}
-		boolVal, ok := val.(*value.BoolValue)
+		boolVal, ok := val.(*value.Boolean)
 		if !ok {
-			t.Fatalf("input %q: expected BoolValue, got %T", tt.input, val)
+			t.Fatalf("input %q: expected Boolean, got %T", tt.input, val)
 		}
-		if boolVal.Val != tt.expected {
-			t.Errorf("input %q: expected %v, got %v", tt.input, tt.expected, boolVal.Val)
+		if boolVal.Value != tt.expected {
+			t.Errorf("input %q: expected %v, got %v", tt.input, tt.expected, boolVal.Value)
 		}
 	}
 }
@@ -202,12 +202,12 @@ func TestStringConcatenation(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'x' not found")
 	}
-	strVal, ok := val.(*value.StringValue)
+	strVal, ok := val.(*value.String)
 	if !ok {
-		t.Fatalf("expected StringValue, got %T", val)
+		t.Fatalf("expected String, got %T", val)
 	}
-	if strVal.Val != "hello world" {
-		t.Errorf("expected 'hello world', got %q", strVal.Val)
+	if strVal.Value != "hello world" {
+		t.Errorf("expected 'hello world', got %q", strVal.Value)
 	}
 }
 
@@ -230,12 +230,12 @@ func TestIfStatement(t *testing.T) {
 		if !ok {
 			t.Fatalf("input %q: variable 'x' not found", tt.input)
 		}
-		intVal, ok := val.(*value.IntValue)
+		intVal, ok := val.(*value.Integer)
 		if !ok {
-			t.Fatalf("input %q: expected IntValue, got %T", tt.input, val)
+			t.Fatalf("input %q: expected Integer, got %T", tt.input, val)
 		}
-		if intVal.Val != tt.expected {
-			t.Errorf("input %q: expected %d, got %d", tt.input, tt.expected, intVal.Val)
+		if intVal.Value != tt.expected {
+			t.Errorf("input %q: expected %d, got %d", tt.input, tt.expected, intVal.Value)
 		}
 	}
 }
@@ -251,12 +251,12 @@ func TestWhileLoop(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'x' not found")
 	}
-	intVal, ok := val.(*value.IntValue)
+	intVal, ok := val.(*value.Integer)
 	if !ok {
-		t.Fatalf("expected IntValue, got %T", val)
+		t.Fatalf("expected Integer, got %T", val)
 	}
-	if intVal.Val != 5 {
-		t.Errorf("expected 5, got %d", intVal.Val)
+	if intVal.Value != 5 {
+		t.Errorf("expected 5, got %d", intVal.Value)
 	}
 }
 
@@ -271,12 +271,12 @@ func TestForLoop(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'sum' not found")
 	}
-	intVal, ok := val.(*value.IntValue)
+	intVal, ok := val.(*value.Integer)
 	if !ok {
-		t.Fatalf("expected IntValue, got %T", val)
+		t.Fatalf("expected Integer, got %T", val)
 	}
-	if intVal.Val != 15 {
-		t.Errorf("expected 15, got %d", intVal.Val)
+	if intVal.Value != 15 {
+		t.Errorf("expected 15, got %d", intVal.Value)
 	}
 }
 
@@ -302,12 +302,12 @@ func TestArray(t *testing.T) {
 		if !ok {
 			t.Fatalf("variable '%s' not found", tt.name)
 		}
-		intVal, ok := val.(*value.IntValue)
+		intVal, ok := val.(*value.Integer)
 		if !ok {
-			t.Fatalf("expected IntValue for %s, got %T", tt.name, val)
+			t.Fatalf("expected Integer for %s, got %T", tt.name, val)
 		}
-		if intVal.Val != tt.expected {
-			t.Errorf("%s: expected %d, got %d", tt.name, tt.expected, intVal.Val)
+		if intVal.Value != tt.expected {
+			t.Errorf("%s: expected %d, got %d", tt.name, tt.expected, intVal.Value)
 		}
 	}
 }
@@ -323,24 +323,24 @@ func TestMap(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'x' not found")
 	}
-	strVal, ok := val.(*value.StringValue)
+	strVal, ok := val.(*value.String)
 	if !ok {
-		t.Fatalf("expected StringValue, got %T", val)
+		t.Fatalf("expected String, got %T", val)
 	}
-	if strVal.Val != "alice" {
-		t.Errorf("expected 'alice', got %q", strVal.Val)
+	if strVal.Value != "alice" {
+		t.Errorf("expected 'alice', got %q", strVal.Value)
 	}
 
 	val, ok = vm.GetGlobal("y")
 	if !ok {
 		t.Fatal("variable 'y' not found")
 	}
-	intVal, ok := val.(*value.IntValue)
+	intVal, ok := val.(*value.Integer)
 	if !ok {
-		t.Fatalf("expected IntValue, got %T", val)
+		t.Fatalf("expected Integer, got %T", val)
 	}
-	if intVal.Val != 30 {
-		t.Errorf("expected 30, got %d", intVal.Val)
+	if intVal.Value != 30 {
+		t.Errorf("expected 30, got %d", intVal.Value)
 	}
 }
 
@@ -367,12 +367,12 @@ func TestBuiltinLen(t *testing.T) {
 		if !ok {
 			t.Fatalf("input %q: variable 'x' not found", tt.input)
 		}
-		intVal, ok := val.(*value.IntValue)
+		intVal, ok := val.(*value.Integer)
 		if !ok {
-			t.Fatalf("input %q: expected IntValue, got %T", tt.input, val)
+			t.Fatalf("input %q: expected Integer, got %T", tt.input, val)
 		}
-		if intVal.Val != tt.expected {
-			t.Errorf("input %q: expected %d, got %d", tt.input, tt.expected, intVal.Val)
+		if intVal.Value != tt.expected {
+			t.Errorf("input %q: expected %d, got %d", tt.input, tt.expected, intVal.Value)
 		}
 	}
 }
@@ -394,12 +394,12 @@ func TestBuiltinStringFunctions(t *testing.T) {
 		if !ok {
 			t.Fatalf("input %q: variable 'x' not found", tt.input)
 		}
-		strVal, ok := val.(*value.StringValue)
+		strVal, ok := val.(*value.String)
 		if !ok {
-			t.Fatalf("input %q: expected StringValue, got %T", tt.input, val)
+			t.Fatalf("input %q: expected String, got %T", tt.input, val)
 		}
-		if strVal.Val != tt.expected {
-			t.Errorf("input %q: expected %q, got %q", tt.input, tt.expected, strVal.Val)
+		if strVal.Value != tt.expected {
+			t.Errorf("input %q: expected %q, got %q", tt.input, tt.expected, strVal.Value)
 		}
 	}
 }
@@ -414,12 +414,12 @@ func TestBuiltinSplitJoin(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'result' not found")
 	}
-	strVal, ok := val.(*value.StringValue)
+	strVal, ok := val.(*value.String)
 	if !ok {
-		t.Fatalf("expected StringValue, got %T", val)
+		t.Fatalf("expected String, got %T", val)
 	}
-	if strVal.Val != "a-b-c" {
-		t.Errorf("expected 'a-b-c', got %q", strVal.Val)
+	if strVal.Value != "a-b-c" {
+		t.Errorf("expected 'a-b-c', got %q", strVal.Value)
 	}
 }
 
@@ -440,12 +440,12 @@ func TestBuiltinContains(t *testing.T) {
 		if !ok {
 			t.Fatalf("input %q: variable 'x' not found", tt.input)
 		}
-		boolVal, ok := val.(*value.BoolValue)
+		boolVal, ok := val.(*value.Boolean)
 		if !ok {
-			t.Fatalf("input %q: expected BoolValue, got %T", tt.input, val)
+			t.Fatalf("input %q: expected Boolean, got %T", tt.input, val)
 		}
-		if boolVal.Val != tt.expected {
-			t.Errorf("input %q: expected %v, got %v", tt.input, tt.expected, boolVal.Val)
+		if boolVal.Value != tt.expected {
+			t.Errorf("input %q: expected %v, got %v", tt.input, tt.expected, boolVal.Value)
 		}
 	}
 }
@@ -462,13 +462,13 @@ func TestBuiltinRange(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'sum' not found")
 	}
-	intVal, ok := val.(*value.IntValue)
+	intVal, ok := val.(*value.Integer)
 	if !ok {
-		t.Fatalf("expected IntValue, got %T", val)
+		t.Fatalf("expected Integer, got %T", val)
 	}
 	// 0 + 1 + 2 + 3 + 4 = 10
-	if intVal.Val != 10 {
-		t.Errorf("expected 10, got %d", intVal.Val)
+	if intVal.Value != 10 {
+		t.Errorf("expected 10, got %d", intVal.Value)
 	}
 }
 
@@ -484,12 +484,12 @@ func TestUserDefinedFunction(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'result' not found")
 	}
-	intVal, ok := val.(*value.IntValue)
+	intVal, ok := val.(*value.Integer)
 	if !ok {
-		t.Fatalf("expected IntValue, got %T", val)
+		t.Fatalf("expected Integer, got %T", val)
 	}
-	if intVal.Val != 7 {
-		t.Errorf("expected 7, got %d", intVal.Val)
+	if intVal.Value != 7 {
+		t.Errorf("expected 7, got %d", intVal.Value)
 	}
 }
 
@@ -508,13 +508,13 @@ func TestRecursiveFunction(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'result' not found")
 	}
-	intVal, ok := val.(*value.IntValue)
+	intVal, ok := val.(*value.Integer)
 	if !ok {
-		t.Fatalf("expected IntValue, got %T", val)
+		t.Fatalf("expected Integer, got %T", val)
 	}
 	// 5! = 120
-	if intVal.Val != 120 {
-		t.Errorf("expected 120, got %d", intVal.Val)
+	if intVal.Value != 120 {
+		t.Errorf("expected 120, got %d", intVal.Value)
 	}
 }
 
@@ -525,24 +525,24 @@ func TestTypeConversion(t *testing.T) {
 		expected string
 	}{
 		{`x = int("42")`, func(v value.Value) bool {
-			iv, ok := v.(*value.IntValue)
-			return ok && iv.Val == 42
+			iv, ok := v.(*value.Integer)
+			return ok && iv.Value == 42
 		}, "42"},
 		{`x = float("3.14")`, func(v value.Value) bool {
-			fv, ok := v.(*value.FloatValue)
-			return ok && fv.Val == 3.14
+			fv, ok := v.(*value.Float)
+			return ok && fv.Value == 3.14
 		}, "3.14"},
 		{`x = string(42)`, func(v value.Value) bool {
-			sv, ok := v.(*value.StringValue)
-			return ok && sv.Val == "42"
+			sv, ok := v.(*value.String)
+			return ok && sv.Value == "42"
 		}, "42"},
 		{`x = bool(1)`, func(v value.Value) bool {
-			bv, ok := v.(*value.BoolValue)
-			return ok && bv.Val == true
+			bv, ok := v.(*value.Boolean)
+			return ok && bv.Value == true
 		}, "true"},
 		{`x = bool(0)`, func(v value.Value) bool {
-			bv, ok := v.(*value.BoolValue)
-			return ok && bv.Val == false
+			bv, ok := v.(*value.Boolean)
+			return ok && bv.Value == false
 		}, "false"},
 	}
 
@@ -571,12 +571,12 @@ func TestArrayMethods(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'last' not found")
 	}
-	intVal, ok := val.(*value.IntValue)
+	intVal, ok := val.(*value.Integer)
 	if !ok {
-		t.Fatalf("expected IntValue, got %T", val)
+		t.Fatalf("expected Integer, got %T", val)
 	}
-	if intVal.Val != 4 {
-		t.Errorf("expected last=4, got %d", intVal.Val)
+	if intVal.Value != 4 {
+		t.Errorf("expected last=4, got %d", intVal.Value)
 	}
 
 	// Check length after pop
@@ -584,12 +584,12 @@ func TestArrayMethods(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'length' not found")
 	}
-	intVal, ok = val.(*value.IntValue)
+	intVal, ok = val.(*value.Integer)
 	if !ok {
-		t.Fatalf("expected IntValue, got %T", val)
+		t.Fatalf("expected Integer, got %T", val)
 	}
-	if intVal.Val != 3 {
-		t.Errorf("expected length=3, got %d", intVal.Val)
+	if intVal.Value != 3 {
+		t.Errorf("expected length=3, got %d", intVal.Value)
 	}
 }
 
@@ -608,11 +608,11 @@ func TestShortCircuitEvaluation(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'called' not found")
 	}
-	boolVal, ok := val.(*value.BoolValue)
+	boolVal, ok := val.(*value.Boolean)
 	if !ok {
-		t.Fatalf("expected BoolValue, got %T", val)
+		t.Fatalf("expected Boolean, got %T", val)
 	}
-	if boolVal.Val != false {
+	if boolVal.Value != false {
 		t.Error("expected 'called' to be false (short-circuit)")
 	}
 
@@ -630,11 +630,11 @@ func TestShortCircuitEvaluation(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'called' not found")
 	}
-	boolVal, ok = val.(*value.BoolValue)
+	boolVal, ok = val.(*value.Boolean)
 	if !ok {
-		t.Fatalf("expected BoolValue, got %T", val)
+		t.Fatalf("expected Boolean, got %T", val)
 	}
-	if boolVal.Val != false {
+	if boolVal.Value != false {
 		t.Error("expected 'called' to be false (short-circuit)")
 	}
 }
@@ -653,13 +653,13 @@ func TestNestedLoops(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'result' not found")
 	}
-	intVal, ok := val.(*value.IntValue)
+	intVal, ok := val.(*value.Integer)
 	if !ok {
-		t.Fatalf("expected IntValue, got %T", val)
+		t.Fatalf("expected Integer, got %T", val)
 	}
 	// (1*10 + 1*20) + (2*10 + 2*20) + (3*10 + 3*20) = 30 + 60 + 90 = 180
-	if intVal.Val != 180 {
-		t.Errorf("expected 180, got %d", intVal.Val)
+	if intVal.Value != 180 {
+		t.Errorf("expected 180, got %d", intVal.Value)
 	}
 }
 
@@ -768,13 +768,13 @@ func TestSysStdinRead(t *testing.T) {
 		t.Fatal("variable 'data' not found")
 	}
 
-	strVal, ok := val.(*value.StringValue)
+	strVal, ok := val.(*value.String)
 	if !ok {
-		t.Fatalf("expected StringValue, got %T", val)
+		t.Fatalf("expected String, got %T", val)
 	}
 
-	if strVal.Val != "test input" {
-		t.Errorf("expected 'test input', got %q", strVal.Val)
+	if strVal.Value != "test input" {
+		t.Errorf("expected 'test input', got %q", strVal.Value)
 	}
 }
 
@@ -815,11 +815,11 @@ func TestStreamProperties(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'closed' not found")
 	}
-	boolVal, ok := val.(*value.BoolValue)
+	boolVal, ok := val.(*value.Boolean)
 	if !ok {
-		t.Fatalf("expected BoolValue, got %T", val)
+		t.Fatalf("expected Boolean, got %T", val)
 	}
-	if boolVal.Val != false {
+	if boolVal.Value != false {
 		t.Error("expected stdin.isClosed() to be false")
 	}
 
@@ -828,11 +828,11 @@ func TestStreamProperties(t *testing.T) {
 	if !ok {
 		t.Fatal("variable 'name' not found")
 	}
-	strVal, ok := val.(*value.StringValue)
+	strVal, ok := val.(*value.String)
 	if !ok {
-		t.Fatalf("expected StringValue, got %T", val)
+		t.Fatalf("expected String, got %T", val)
 	}
-	if strVal.Val != "stdin" {
-		t.Errorf("expected 'stdin', got %q", strVal.Val)
+	if strVal.Value != "stdin" {
+		t.Errorf("expected 'stdin', got %q", strVal.Value)
 	}
 }

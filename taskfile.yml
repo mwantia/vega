@@ -6,8 +6,10 @@ env:
     GOOS: linux
     MAIN_PATH: ./cmd/vega/main.go
     BUILD_PATH: ./build/vega
+    MOUNT_URI: ephemeral://
 
 dotenv: ['.env']
+
 
 tasks:
     default:
@@ -33,13 +35,13 @@ tasks:
         desc: Compile the project into a static binary for unix
         cmds:
         - task: init
-        - go build -a -ldflags '-s -w -extldflags "-static"' -trimpath -o ${BUILD_PATH} ${MAIN_PATH}
+        - timeout 60 go build -a -ldflags '-s -w -extldflags "-static"' -trimpath -o ${BUILD_PATH} ${MAIN_PATH}
         
     build-windows:
         desc: Compile the project with debug information
         cmds:
         - task: init
-        - GOOS=windows go build -a -ldflags '-s -w -extldflags "-static"' -trimpath -o ${BUILD_PATH}.exe ${MAIN_PATH}
+        - GOOS=windows timeout 60 go build -a -ldflags '-s -w -extldflags "-static"' -trimpath -o ${BUILD_PATH}.exe ${MAIN_PATH}
 
     build:
         desc: Compile the project into a static binary

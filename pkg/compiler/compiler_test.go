@@ -40,12 +40,12 @@ func TestIntegerLiteral(t *testing.T) {
 		t.Fatalf("expected 1 constant, got %d", len(bc.Constants))
 	}
 
-	intVal, ok := bc.Constants[0].(*value.IntValue)
+	intVal, ok := bc.Constants[0].(*value.Integer)
 	if !ok {
-		t.Fatalf("expected IntValue, got %T", bc.Constants[0])
+		t.Fatalf("expected Integer, got %T", bc.Constants[0])
 	}
-	if intVal.Val != 42 {
-		t.Errorf("expected 42, got %d", intVal.Val)
+	if intVal.Value != 42 {
+		t.Errorf("expected 42, got %d", intVal.Value)
 	}
 
 	// Should have: LOAD_CONST 0, POP
@@ -68,12 +68,12 @@ func TestStringLiteral(t *testing.T) {
 		t.Fatalf("expected 1 constant, got %d", len(bc.Constants))
 	}
 
-	strVal, ok := bc.Constants[0].(*value.StringValue)
+	strVal, ok := bc.Constants[0].(*value.String)
 	if !ok {
-		t.Fatalf("expected StringValue, got %T", bc.Constants[0])
+		t.Fatalf("expected String, got %T", bc.Constants[0])
 	}
-	if strVal.Val != "hello" {
-		t.Errorf("expected 'hello', got %q", strVal.Val)
+	if strVal.Value != "hello" {
+		t.Errorf("expected 'hello', got %q", strVal.Value)
 	}
 }
 
@@ -84,11 +84,11 @@ func TestBooleanLiteral(t *testing.T) {
 		t.Fatalf("expected 1 constant, got %d", len(bc.Constants))
 	}
 
-	boolVal, ok := bc.Constants[0].(*value.BoolValue)
+	boolVal, ok := bc.Constants[0].(*value.Boolean)
 	if !ok {
-		t.Fatalf("expected BoolValue, got %T", bc.Constants[0])
+		t.Fatalf("expected Boolean, got %T", bc.Constants[0])
 	}
-	if !boolVal.Val {
+	if !boolVal.Value {
 		t.Error("expected true")
 	}
 }

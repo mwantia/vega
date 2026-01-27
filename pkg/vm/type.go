@@ -21,26 +21,26 @@ func newBuiltinStringFunction(vm *VirtualMachine, args []value.Value) (value.Val
 	return value.NewString(args[0].String()), nil
 }
 
-func newBuiltinIntFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
+func newBuiltinIntegerFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
 	if len(args) != 1 {
-		return nil, fmt.Errorf("int() expects 1 argument, got %d", len(args))
+		return nil, fmt.Errorf("integer() expects 1 argument, got %d", len(args))
 	}
 	switch v := args[0].(type) {
-	case *value.IntValue:
+	case *value.Integer:
 		return v, nil
-	case *value.FloatValue:
-		return value.NewInt(int64(v.Val)), nil
-	case *value.StringValue:
-		i, err := strconv.ParseInt(v.Val, 10, 64)
+	case *value.Float:
+		return value.NewInteger(int64(v.Value)), nil
+	case *value.String:
+		i, err := strconv.ParseInt(v.Value, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("cannot convert %q to int", v.Val)
+			return nil, fmt.Errorf("cannot convert %q to int", v.Value)
 		}
-		return value.NewInt(i), nil
-	case *value.BoolValue:
-		if v.Val {
-			return value.NewInt(1), nil
+		return value.NewInteger(i), nil
+	case *value.Boolean:
+		if v.Value {
+			return value.NewInteger(1), nil
 		}
-		return value.NewInt(0), nil
+		return value.NewInteger(0), nil
 	default:
 		return nil, fmt.Errorf("cannot convert %s to int", v.Type())
 	}
@@ -51,14 +51,14 @@ func newBuiltinFloatFunction(vm *VirtualMachine, args []value.Value) (value.Valu
 		return nil, fmt.Errorf("float() expects 1 argument, got %d", len(args))
 	}
 	switch v := args[0].(type) {
-	case *value.FloatValue:
+	case *value.Float:
 		return v, nil
-	case *value.IntValue:
-		return value.NewFloat(float64(v.Val)), nil
-	case *value.StringValue:
-		f, err := strconv.ParseFloat(v.Val, 64)
+	case *value.Integer:
+		return value.NewFloat(float64(v.Value)), nil
+	case *value.String:
+		f, err := strconv.ParseFloat(v.Value, 64)
 		if err != nil {
-			return nil, fmt.Errorf("cannot convert %q to float", v.Val)
+			return nil, fmt.Errorf("cannot convert %q to float", v.Value)
 		}
 		return value.NewFloat(f), nil
 	default:
@@ -66,9 +66,9 @@ func newBuiltinFloatFunction(vm *VirtualMachine, args []value.Value) (value.Valu
 	}
 }
 
-func newBuiltinBoolFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
+func newBuiltinBooleanFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
 	if len(args) != 1 {
-		return nil, fmt.Errorf("bool() expects 1 argument, got %d", len(args))
+		return nil, fmt.Errorf("boolean() expects 1 argument, got %d", len(args))
 	}
-	return value.NewBool(args[0].Boolean()), nil
+	return value.NewBoolean(args[0].Boolean()), nil
 }

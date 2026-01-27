@@ -270,7 +270,7 @@ func (c *Compiler) compileBlock(block *ast.BlockStatement) {
 func (c *Compiler) compileExpression(expr ast.Expression) {
 	switch e := expr.(type) {
 	case *ast.IntegerLiteral:
-		constIdx := c.bytecode.AddConstant(value.NewInt(e.Value))
+		constIdx := c.bytecode.AddConstant(value.NewInteger(e.Value))
 		c.bytecode.EmitArg(OpLoadConst, constIdx, e.Pos().Line)
 
 	case *ast.FloatLiteral:
@@ -282,7 +282,7 @@ func (c *Compiler) compileExpression(expr ast.Expression) {
 		c.bytecode.EmitArg(OpLoadConst, constIdx, e.Pos().Line)
 
 	case *ast.BooleanLiteral:
-		constIdx := c.bytecode.AddConstant(value.NewBool(e.Value))
+		constIdx := c.bytecode.AddConstant(value.NewBoolean(e.Value))
 		c.bytecode.EmitArg(OpLoadConst, constIdx, e.Pos().Line)
 
 	case *ast.NilLiteral:
@@ -532,12 +532,25 @@ type FunctionValue struct {
 	Bytecode   *Bytecode
 }
 
-func (f *FunctionValue) Type() string   { return "function" }
-func (f *FunctionValue) String() string { return fmt.Sprintf("<fn %s>", f.Name) }
-func (f *FunctionValue) Boolean() bool  { return true }
+func (f *FunctionValue) Type() string {
+	return "function"
+}
+
+func (f *FunctionValue) String() string {
+	return fmt.Sprintf("<fn %s>", f.Name)
+}
+
+func (f *FunctionValue) Boolean() bool {
+	return true
+}
+
 func (f *FunctionValue) Equal(other value.Value) bool {
 	if o, ok := other.(*FunctionValue); ok {
 		return f.Name == o.Name
 	}
 	return false
+}
+
+func (v *FunctionValue) Method(name string, args []value.Value) (value.Value, error) {
+	return nil, nil
 }

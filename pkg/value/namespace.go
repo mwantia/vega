@@ -49,6 +49,13 @@ func (n *NamespaceValue) Equal(other Value) bool {
 	return false
 }
 
+func (v *NamespaceValue) Method(name string, args []Value) (Value, error) {
+	if method, ok := v.GetMethod(name); ok {
+		return method(args)
+	}
+	return nil, fmt.Errorf("namespace '%s' has no method '%s'", v.name, name)
+}
+
 // Name returns the namespace name.
 func (n *NamespaceValue) Name() string {
 	return n.name

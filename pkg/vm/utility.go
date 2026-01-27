@@ -10,31 +10,31 @@ func newBuiltinRangeFunction(vm *VirtualMachine, args []value.Value) (value.Valu
 	switch len(args) {
 	case 1:
 		// range(n) -> [0, 1, ..., n-1]
-		n, ok := args[0].(*value.IntValue)
+		n, ok := args[0].(*value.Integer)
 		if !ok {
 			return nil, fmt.Errorf("range() argument must be int, got %s", args[0].Type())
 		}
-		elements := make([]value.Value, n.Val)
-		for i := int64(0); i < n.Val; i++ {
-			elements[i] = value.NewInt(i)
+		elements := make([]value.Value, n.Value)
+		for i := int64(0); i < n.Value; i++ {
+			elements[i] = value.NewInteger(i)
 		}
 		return value.NewArray(elements), nil
 	case 2:
 		// range(start, end) -> [start, start+1, ..., end-1]
-		start, ok := args[0].(*value.IntValue)
+		start, ok := args[0].(*value.Integer)
 		if !ok {
 			return nil, fmt.Errorf("range() first argument must be int, got %s", args[0].Type())
 		}
-		end, ok := args[1].(*value.IntValue)
+		end, ok := args[1].(*value.Integer)
 		if !ok {
 			return nil, fmt.Errorf("range() second argument must be int, got %s", args[1].Type())
 		}
-		if start.Val > end.Val {
+		if start.Value > end.Value {
 			return value.NewArray([]value.Value{}), nil
 		}
-		elements := make([]value.Value, end.Val-start.Val)
-		for i := start.Val; i < end.Val; i++ {
-			elements[i-start.Val] = value.NewInt(i)
+		elements := make([]value.Value, end.Value-start.Value)
+		for i := start.Value; i < end.Value; i++ {
+			elements[i-start.Value] = value.NewInteger(i)
 		}
 		return value.NewArray(elements), nil
 	default:
