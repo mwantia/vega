@@ -15,6 +15,7 @@ type Metadata struct {
 
 var _ Value = (*Metadata)(nil)
 var _ Indexable = (*Metadata)(nil)
+var _ Memberable = (*Metadata)(nil)
 var _ Methodable = (*Metadata)(nil)
 
 // NewMetadata creates a new Metadata from VFS metadata.
@@ -44,8 +45,102 @@ func (m *Metadata) Equal(other Value) bool {
 	return m.Meta.ID == o.Meta.ID && m.Meta.Key == o.Meta.Key
 }
 
+func (v *Metadata) GetMember(name string) (Value, error) {
+	switch name {
+	case "id":
+		return NewString(v.Meta.ID), nil
+	case "key":
+		return NewString(v.Meta.Key), nil
+	case "mode":
+		i := int64(v.Meta.Mode)
+		return NewInteger(i), nil
+	case "size":
+		return NewInteger(v.Meta.Size), nil
+	case "accesstime":
+		s := v.Meta.AccessTime.Format(time.RFC3339)
+		return NewString(s), nil
+	case "modifytime":
+		s := v.Meta.ModifyTime.Format(time.RFC3339)
+		return NewString(s), nil
+	case "createtime":
+		s := v.Meta.CreateTime.Format(time.RFC3339)
+		return NewString(s), nil
+	case "uid":
+		return NewInteger(v.Meta.UID), nil
+	case "gid":
+		return NewInteger(v.Meta.GID), nil
+	case "contentType":
+		s := string(v.Meta.ContentType)
+		return NewString(s), nil
+	case "etag":
+		return NewString(v.Meta.ETag), nil
+	}
+
+	return nil, fmt.Errorf("unknown membername defined")
+}
+
+func (v *Metadata) SetMember(name string, val Value) (bool, error) {
+	switch name {
+	case "id":
+		if s, ok := val.(*String); ok {
+			v.Meta.ID = s.Value
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'string', got '%s'", val.Type())
+	case "key":
+		if s, ok := val.(*String); ok {
+			v.Meta.Key = s.Value
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'string', got '%s'", val.Type())
+	case "mode":
+		if i, ok := val.(*Integer); ok {
+			v.Meta.Mode = data.FileMode(i.Value)
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'integer', got '%s'", val.Type())
+	case "size":
+		if i, ok := val.(*Integer); ok {
+			v.Meta.Size = i.Value
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'integer', got '%s'", val.Type())
+	case "accesstime":
+		return false, fmt.Errorf("not yet implemented")
+	case "modifytime":
+		return false, fmt.Errorf("not yet implemented")
+	case "createtime":
+		return false, fmt.Errorf("not yet implemented")
+	case "uid":
+		if i, ok := val.(*Integer); ok {
+			v.Meta.UID = i.Value
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'integer', got '%s'", val.Type())
+	case "gid":
+		if i, ok := val.(*Integer); ok {
+			v.Meta.GID = i.Value
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'integer', got '%s'", val.Type())
+	case "contentType":
+		if s, ok := val.(*String); ok {
+			v.Meta.ContentType = data.ContentType(s.Value)
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'string', got '%s'", val.Type())
+	case "etag":
+		if s, ok := val.(*String); ok {
+			v.Meta.ETag = s.Value
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'string', got '%s'", val.Type())
+	}
+	return false, fmt.Errorf("unknown membername defined")
+}
+
 func (v *Metadata) Method(name string, args []Value) (Value, error) {
-	return nil, fmt.Errorf("unknown method call")
+	return nil, fmt.Errorf("unknown method call defined")
 }
 
 // Index allows accessing metadata fields via meta["field"].

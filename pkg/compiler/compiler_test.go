@@ -419,7 +419,7 @@ func TestFunctionDefinition(t *testing.T) {
 	// The function should be stored as a constant
 	foundFunc := false
 	for _, c := range bc.Constants {
-		if _, ok := c.(*FunctionValue); ok {
+		if _, ok := c.(*Function); ok {
 			foundFunc = true
 			break
 		}
@@ -434,7 +434,7 @@ func TestReturnStatement(t *testing.T) {
 
 	// Find the function and check it has RETURN
 	for _, c := range bc.Constants {
-		if fn, ok := c.(*FunctionValue); ok {
+		if fn, ok := c.(*Function); ok {
 			foundReturn := false
 			for _, instr := range fn.Bytecode.Instructions {
 				if instr.Op == OpReturn {

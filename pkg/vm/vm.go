@@ -237,11 +237,20 @@ func (vm *VirtualMachine) executeInstruction(instr compiler.Instruction, frame *
 
 	case compiler.OpLoadAttr:
 		obj := vm.pop()
-		val, err := vm.getAttribute(obj, instr.Name)
-		if err != nil {
-			return err
+		if member, ok := obj.(value.Memberable); ok {
+			name := strings.ToLower(strings.TrimSpace(instr.Name))
+			val, err := member.GetMember(name)
+			if err != nil {
+				return fmt.Errorf("failed to compile 'OpLoadAttr': %v", err)
+			}
+			vm.push(val)
+		} else {
+			val, err := vm.getAttribute(obj, instr.Name)
+			if err != nil {
+				return err
+			}
+			vm.push(val)
 		}
-		vm.push(val)
 
 	case compiler.OpPop:
 		vm.pop()
@@ -534,14 +543,6 @@ func (vm *VirtualMachine) getAttribute(obj value.Value, name string) (value.Valu
 			return v, nil
 		}
 		return value.Nil, nil
-	case *value.Array:
-		if name == "length" {
-			return value.NewInteger(int64(o.Len())), nil
-		}
-	case *value.String:
-		if name == "length" {
-			return value.NewInteger(int64(len(o.Value))), nil
-		}
 	case *value.Stream:
 		// Stream properties
 		switch name {
@@ -578,9 +579,9 @@ func (vm *VirtualMachine) callFunction(name string, argCount int) error {
 	}
 
 	// Check user-defined functions
-	var fn *compiler.FunctionValue
+	var fn *compiler.Function
 	if val, ok := vm.globals[name]; ok {
-		fn, ok = val.(*compiler.FunctionValue)
+		fn, ok = val.(*compiler.Function)
 		if !ok {
 			return fmt.Errorf("'%s' is not a function", name)
 		}

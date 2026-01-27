@@ -210,16 +210,16 @@ func (c *Compiler) compileFunction(s *ast.FunctionDefinition) {
 	funcCompiler.bytecode.Emit(OpReturn, line)
 
 	// Store function info as a constant
-	funcVal := &FunctionValue{
+	fn := &Function{
 		Name:       s.Name.Value,
 		Parameters: make([]string, len(s.Parameters)),
 		Bytecode:   funcCompiler.bytecode,
 	}
 	for i, p := range s.Parameters {
-		funcVal.Parameters[i] = p.Value
+		fn.Parameters[i] = p.Value
 	}
 
-	constIdx := c.bytecode.AddConstant(funcVal)
+	constIdx := c.bytecode.AddConstant(fn)
 	c.bytecode.EmitArg(OpLoadConst, constIdx, line)
 	c.bytecode.EmitName(OpStoreVar, s.Name.Value, line)
 }
@@ -523,34 +523,4 @@ func (c *Compiler) compilePipe(e *ast.PipeExpression) {
 	// For now, we emit a special pipe opcode that the VM will handle
 	c.compileExpression(e.Right)
 	c.bytecode.Emit(OpPipe, e.Pos().Line)
-}
-
-// FunctionValue represents a compiled function.
-type FunctionValue struct {
-	Name       string
-	Parameters []string
-	Bytecode   *Bytecode
-}
-
-func (f *FunctionValue) Type() string {
-	return "function"
-}
-
-func (f *FunctionValue) String() string {
-	return fmt.Sprintf("<fn %s>", f.Name)
-}
-
-func (f *FunctionValue) Boolean() bool {
-	return true
-}
-
-func (f *FunctionValue) Equal(other value.Value) bool {
-	if o, ok := other.(*FunctionValue); ok {
-		return f.Name == o.Name
-	}
-	return false
-}
-
-func (v *FunctionValue) Method(name string, args []value.Value) (value.Value, error) {
-	return nil, nil
 }

@@ -37,6 +37,15 @@ type Methodable interface {
 	Method(name string, args []Value) (Value, error)
 }
 
+// Memberable is
+type Memberable interface {
+	Value
+	// GetMember
+	GetMember(name string) (Value, error)
+	// SetMember
+	SetMember(name string, val Value) (bool, error)
+}
+
 // Comparable values can be compared with < > <= >=
 type Comparable interface {
 	Value
