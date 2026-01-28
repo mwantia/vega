@@ -6,6 +6,10 @@ import (
 	"github.com/mwantia/vega/pkg/value"
 )
 
+func newBuiltinNowFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
+	return value.NewTimeNow(), nil
+}
+
 func newBuiltinRangeFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
 	switch len(args) {
 	case 1:
@@ -15,7 +19,7 @@ func newBuiltinRangeFunction(vm *VirtualMachine, args []value.Value) (value.Valu
 			return nil, fmt.Errorf("range() argument must be int, got %s", args[0].Type())
 		}
 		elements := make([]value.Value, n.Value)
-		for i := int64(0); i < n.Value; i++ {
+		for i := 0; i < n.Value; i++ {
 			elements[i] = value.NewInteger(i)
 		}
 		return value.NewArray(elements), nil

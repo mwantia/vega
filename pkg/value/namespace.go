@@ -49,6 +49,19 @@ func (n *NamespaceValue) Equal(other Value) bool {
 	return false
 }
 
+func (v *NamespaceValue) GetMember(name string) (Value, error) {
+	if val, ok := v.Get(name); ok {
+		return val, nil
+	}
+
+	return nil, fmt.Errorf("namespace '%s' has no member '%s'", v.Name(), name)
+}
+
+func (v *NamespaceValue) SetMember(name string, val Value) (bool, error) {
+	v.Set(name, val)
+	return true, nil
+}
+
 func (v *NamespaceValue) Method(name string, args []Value) (Value, error) {
 	if method, ok := v.GetMethod(name); ok {
 		return method(args)

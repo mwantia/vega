@@ -75,7 +75,7 @@ func runVirtualMachineWithOutput(t *testing.T, input string) (*VirtualMachine, s
 func TestIntegerArithmetic(t *testing.T) {
 	tests := []struct {
 		input    string
-		expected int64
+		expected int
 	}{
 		{"x = 1 + 2", 3},
 		{"x = 5 - 3", 2},
@@ -214,7 +214,7 @@ func TestStringConcatenation(t *testing.T) {
 func TestIfStatement(t *testing.T) {
 	tests := []struct {
 		input    string
-		expected int64
+		expected int
 	}{
 		{"x = 0\nif true { x = 1 }", 1},
 		{"x = 0\nif false { x = 1 }", 0},
@@ -290,7 +290,7 @@ func TestArray(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		expected int64
+		expected int
 	}{
 		{"x", 1},
 		{"y", 2},
@@ -354,11 +354,11 @@ func TestFunctionCall(t *testing.T) {
 func TestBuiltinLen(t *testing.T) {
 	tests := []struct {
 		input    string
-		expected int64
+		expected int
 	}{
-		{`x = len("hello")`, 5},
-		{`x = len([1, 2, 3])`, 3},
-		{`x = len({a: 1, b: 2})`, 2},
+		{`x = "hello".length()`, 5},
+		{`x = [1, 2, 3].length()`, 3},
+		{`x = {a: 1, b: 2}.length()`, 2},
 	}
 
 	for _, tt := range tests {
@@ -382,10 +382,10 @@ func TestBuiltinStringFunctions(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{`x = upper("hello")`, "HELLO"},
-		{`x = lower("HELLO")`, "hello"},
-		{`x = trim("  hello  ")`, "hello"},
-		{`x = replace("hello", "l", "L")`, "heLLo"},
+		{`x = "hello".upper()`, "HELLO"},
+		{`x = "HELLO".lower()`, "hello"},
+		{`x = "  hello  ".trim()`, "hello"},
+		{`x = "hello".replace("l", "L")`, "heLLo"},
 	}
 
 	for _, tt := range tests {
@@ -406,8 +406,8 @@ func TestBuiltinStringFunctions(t *testing.T) {
 
 func TestBuiltinSplitJoin(t *testing.T) {
 	vm := runVirtualMachine(t, `
-		parts = split("a,b,c", ",")
-		result = join(parts, "-")
+		parts = "a,b,c".split(",")
+		result = parts.join("-")
 	`)
 
 	val, ok := vm.GetGlobal("result")
@@ -428,10 +428,10 @@ func TestBuiltinContains(t *testing.T) {
 		input    string
 		expected bool
 	}{
-		{`x = contains("hello", "ell")`, true},
-		{`x = contains("hello", "xyz")`, false},
-		{`x = contains([1, 2, 3], 2)`, true},
-		{`x = contains([1, 2, 3], 5)`, false},
+		{`x = "hello".contains("ell")`, true},
+		{`x = "hello".contains("xyz")`, false},
+		{`x = [1, 2, 3].contains(2)`, true},
+		{`x = [1, 2, 3].contains(5)`, false},
 	}
 
 	for _, tt := range tests {
@@ -524,7 +524,7 @@ func TestTypeConversion(t *testing.T) {
 		check    func(value.Value) bool
 		expected string
 	}{
-		{`x = int("42")`, func(v value.Value) bool {
+		{`x = integer("42")`, func(v value.Value) bool {
 			iv, ok := v.(*value.Integer)
 			return ok && iv.Value == 42
 		}, "42"},
@@ -536,11 +536,11 @@ func TestTypeConversion(t *testing.T) {
 			sv, ok := v.(*value.String)
 			return ok && sv.Value == "42"
 		}, "42"},
-		{`x = bool(1)`, func(v value.Value) bool {
+		{`x = boolean(1)`, func(v value.Value) bool {
 			bv, ok := v.(*value.Boolean)
 			return ok && bv.Value == true
 		}, "true"},
-		{`x = bool(0)`, func(v value.Value) bool {
+		{`x = boolean(0)`, func(v value.Value) bool {
 			bv, ok := v.(*value.Boolean)
 			return ok && bv.Value == false
 		}, "false"},
@@ -561,9 +561,9 @@ func TestTypeConversion(t *testing.T) {
 func TestArrayMethods(t *testing.T) {
 	vm := runVirtualMachine(t, `
 		arr = [1, 2, 3]
-		push(arr, 4)
-		last = pop(arr)
-		length = len(arr)
+		arr.push(4)
+		last = arr.pop()
+		length = arr.length()
 	`)
 
 	// Check last popped value
@@ -780,7 +780,7 @@ func TestSysStdinRead(t *testing.T) {
 
 func TestStreamProperties(t *testing.T) {
 	input := `
-		closed = stdin().isClosed()
+		closed = stdin().closed
 		name = stdin().name
 	`
 

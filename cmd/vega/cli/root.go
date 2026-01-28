@@ -93,7 +93,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 					return fmt.Errorf("runtime error: %w", err)
 				}
 
-				vm.SetGlobal("exitcode", value.NewInteger(int64(exitCode)))
+				vm.SetGlobal("exitcode", value.NewInteger(exitCode))
 				// If interactive is 'false' (default), close immediately to avoid running vega
 				if !interactive {
 					return fs.Shutdown(ctx)

@@ -21,7 +21,7 @@ func (i *Identifier) String() string       { return i.Value }
 // IntegerLiteral represents an integer like 42.
 type IntegerLiteral struct {
 	Token token.Token
-	Value int64
+	Value int
 }
 
 func (il *IntegerLiteral) expressionNode()      {}

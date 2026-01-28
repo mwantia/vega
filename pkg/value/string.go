@@ -40,7 +40,7 @@ func (s *String) Equal(other Value) bool {
 func (v *String) Method(name string, args []Value) (Value, error) {
 	switch name {
 	case "length":
-		i := int64(len(v.Value))
+		i := len(v.Value)
 		return NewInteger(i), nil
 	case "upper":
 		s := strings.ToUpper(v.Value)
@@ -113,7 +113,7 @@ func (v *String) Method(name string, args []Value) (Value, error) {
 		if !ok {
 			return nil, fmt.Errorf("method '%s' first argument must be 'string', got '%s'", name, args[0].Type())
 		}
-		return NewInteger(int64(strings.Index(v.Value, sub.Value))), nil
+		return NewInteger(strings.Index(v.Value, sub.Value)), nil
 	}
 
 	return nil, fmt.Errorf("unknown method-map: '%s'", name)

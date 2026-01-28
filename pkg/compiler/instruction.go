@@ -19,7 +19,7 @@ func (i Instruction) String() string {
 	switch i.Op {
 	case OpLoadConst:
 		return fmt.Sprintf("%s %d", i.Op, i.Arg)
-	case OpLoadVar, OpStoreVar, OpLoadAttr:
+	case OpLoadVar, OpStoreVar, OpLoadMember:
 		return fmt.Sprintf("%s %q", i.Op, i.Name)
 	case OpCall, OpCallMethod:
 		return fmt.Sprintf("%s %q (%d args)", i.Op, i.Name, i.Arg)
@@ -43,8 +43,8 @@ type Bytecode struct {
 }
 
 type loopInfo struct {
-	startAddr    int   // Address of loop start (for continue)
-	breakAddrs   []int // Addresses of break jumps to patch
+	startAddr     int   // Address of loop start (for continue)
+	breakAddrs    []int // Addresses of break jumps to patch
 	continueAddrs []int // Addresses of continue jumps to patch
 }
 
@@ -131,8 +131,8 @@ func (b *Bytecode) PatchJumpTo(addr, target int) {
 // PushLoop starts tracking a new loop.
 func (b *Bytecode) PushLoop(startAddr int) {
 	b.loopStack = append(b.loopStack, loopInfo{
-		startAddr:    startAddr,
-		breakAddrs:   make([]int, 0),
+		startAddr:     startAddr,
+		breakAddrs:    make([]int, 0),
 		continueAddrs: make([]int, 0),
 	})
 }

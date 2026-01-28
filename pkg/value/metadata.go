@@ -52,10 +52,10 @@ func (v *Metadata) GetMember(name string) (Value, error) {
 	case "key":
 		return NewString(v.Meta.Key), nil
 	case "mode":
-		i := int64(v.Meta.Mode)
+		i := int(v.Meta.Mode)
 		return NewInteger(i), nil
 	case "size":
-		return NewInteger(v.Meta.Size), nil
+		return NewLong(v.Meta.Size), nil
 	case "accesstime":
 		s := v.Meta.AccessTime.Format(time.RFC3339)
 		return NewString(s), nil
@@ -66,9 +66,9 @@ func (v *Metadata) GetMember(name string) (Value, error) {
 		s := v.Meta.CreateTime.Format(time.RFC3339)
 		return NewString(s), nil
 	case "uid":
-		return NewInteger(v.Meta.UID), nil
+		return NewLong(v.Meta.UID), nil
 	case "gid":
-		return NewInteger(v.Meta.GID), nil
+		return NewLong(v.Meta.GID), nil
 	case "contentType":
 		s := string(v.Meta.ContentType)
 		return NewString(s), nil
@@ -100,11 +100,15 @@ func (v *Metadata) SetMember(name string, val Value) (bool, error) {
 		}
 		return false, fmt.Errorf("member argument must be 'integer', got '%s'", val.Type())
 	case "size":
-		if i, ok := val.(*Integer); ok {
-			v.Meta.Size = i.Value
+		if l, ok := val.(*Long); ok {
+			v.Meta.Size = l.Value
 			return true, nil
 		}
-		return false, fmt.Errorf("member argument must be 'integer', got '%s'", val.Type())
+		if i, ok := val.(*Integer); ok {
+			v.Meta.Size = int64(i.Value)
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'integer' or 'long', got '%s'", val.Type())
 	case "accesstime":
 		return false, fmt.Errorf("not yet implemented")
 	case "modifytime":
@@ -112,17 +116,25 @@ func (v *Metadata) SetMember(name string, val Value) (bool, error) {
 	case "createtime":
 		return false, fmt.Errorf("not yet implemented")
 	case "uid":
-		if i, ok := val.(*Integer); ok {
-			v.Meta.UID = i.Value
+		if l, ok := val.(*Long); ok {
+			v.Meta.UID = l.Value
 			return true, nil
 		}
-		return false, fmt.Errorf("member argument must be 'integer', got '%s'", val.Type())
+		if i, ok := val.(*Integer); ok {
+			v.Meta.UID = int64(i.Value)
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'integer' or 'long', got '%s'", val.Type())
 	case "gid":
-		if i, ok := val.(*Integer); ok {
-			v.Meta.GID = i.Value
+		if l, ok := val.(*Long); ok {
+			v.Meta.GID = l.Value
 			return true, nil
 		}
-		return false, fmt.Errorf("member argument must be 'integer', got '%s'", val.Type())
+		if i, ok := val.(*Integer); ok {
+			v.Meta.GID = int64(i.Value)
+			return true, nil
+		}
+		return false, fmt.Errorf("member argument must be 'integer' or 'long', got '%s'", val.Type())
 	case "contentType":
 		if s, ok := val.(*String); ok {
 			v.Meta.ContentType = data.ContentType(s.Value)
@@ -166,9 +178,9 @@ func (m *Metadata) GetField(name string) (Value, error) {
 	case "key":
 		return NewString(m.Meta.Key), nil
 	case "mode":
-		return NewInteger(int64(m.Meta.Mode)), nil
+		return NewInteger(int(m.Meta.Mode)), nil
 	case "size":
-		return NewInteger(m.Meta.Size), nil
+		return NewLong(m.Meta.Size), nil
 	case "accesstime":
 		return NewString(m.Meta.AccessTime.Format(time.RFC3339)), nil
 	case "modifytime":
@@ -176,9 +188,9 @@ func (m *Metadata) GetField(name string) (Value, error) {
 	case "createtime":
 		return NewString(m.Meta.CreateTime.Format(time.RFC3339)), nil
 	case "uid":
-		return NewInteger(m.Meta.UID), nil
+		return NewLong(m.Meta.UID), nil
 	case "gid":
-		return NewInteger(m.Meta.GID), nil
+		return NewLong(m.Meta.GID), nil
 	case "contentType":
 		return NewString(string(m.Meta.ContentType)), nil
 	case "etag":

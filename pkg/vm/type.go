@@ -29,13 +29,13 @@ func newBuiltinIntegerFunction(vm *VirtualMachine, args []value.Value) (value.Va
 	case *value.Integer:
 		return v, nil
 	case *value.Float:
-		return value.NewInteger(int64(v.Value)), nil
+		return value.NewInteger(int(v.Value)), nil
 	case *value.String:
 		i, err := strconv.ParseInt(v.Value, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("cannot convert %q to int", v.Value)
 		}
-		return value.NewInteger(i), nil
+		return value.NewInteger(int(i)), nil
 	case *value.Boolean:
 		if v.Value {
 			return value.NewInteger(1), nil

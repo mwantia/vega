@@ -28,12 +28,12 @@ func newBuiltinReadFunction(vm *VirtualMachine, args []value.Value) (value.Value
 	var offset, size int64 = 0, -1
 	if len(args) >= 2 {
 		if v, ok := args[1].(*value.Integer); ok {
-			offset = v.Value
+			offset = int64(v.Value)
 		}
 	}
 	if len(args) >= 3 {
 		if v, ok := args[2].(*value.Integer); ok {
-			size = v.Value
+			size = int64(v.Value)
 		}
 	}
 
@@ -65,7 +65,7 @@ func newBuiltinWriteFunction(vm *VirtualMachine, args []value.Value) (value.Valu
 	var offset int64 = 0
 	if len(args) >= 3 {
 		if v, ok := args[2].(*value.Integer); ok {
-			offset = v.Value
+			offset = int64(v.Value)
 		}
 	}
 
@@ -74,7 +74,7 @@ func newBuiltinWriteFunction(vm *VirtualMachine, args []value.Value) (value.Valu
 		return nil, fmt.Errorf("write failed: %w", err)
 	}
 
-	return value.NewInteger(int64(n)), nil
+	return value.NewLong(int64(n)), nil
 }
 
 // stat(path) - returns file metadata
@@ -335,7 +335,7 @@ func newBuiltinExecFunction(vm *VirtualMachine, args []value.Value) (value.Value
 		return nil, fmt.Errorf("exec failed: %w", err)
 	}
 
-	return value.NewInteger(int64(exitCode)), nil
+	return value.NewInteger(exitCode), nil
 }
 
 // sexec(command...) - executes a VFS command with VM's stdin/stdout/stderr
@@ -359,7 +359,7 @@ func newBuiltinSexecFunction(vm *VirtualMachine, args []value.Value) (value.Valu
 		return nil, fmt.Errorf("sexec failed: %w", err)
 	}
 
-	return value.NewInteger(int64(exitCode)), nil
+	return value.NewInteger(exitCode), nil
 }
 
 // capture(command...) - executes a VFS command and returns output as string

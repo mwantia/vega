@@ -62,7 +62,7 @@ func (m *Map) Equal(other Value) bool {
 func (v *Map) Method(name string, args []Value) (Value, error) {
 	switch name {
 	case "length":
-		i := int64(v.Length())
+		i := v.Length()
 		return NewInteger(i), nil
 	case "keys":
 		keys := v.Keys()

@@ -235,19 +235,13 @@ func (vm *VirtualMachine) executeInstruction(instr compiler.Instruction, frame *
 			vm.globals[instr.Name] = val
 		}
 
-	case compiler.OpLoadAttr:
+	case compiler.OpLoadMember:
 		obj := vm.pop()
 		if member, ok := obj.(value.Memberable); ok {
 			name := strings.ToLower(strings.TrimSpace(instr.Name))
 			val, err := member.GetMember(name)
 			if err != nil {
 				return fmt.Errorf("failed to compile 'OpLoadAttr': %v", err)
-			}
-			vm.push(val)
-		} else {
-			val, err := vm.getAttribute(obj, instr.Name)
-			if err != nil {
-				return err
 			}
 			vm.push(val)
 		}
@@ -273,28 +267,32 @@ func (vm *VirtualMachine) executeInstruction(instr compiler.Instruction, frame *
 
 	case compiler.OpSub:
 		return vm.numericOp(func(l, r value.Numeric) (value.Value, error) {
-			return l.Sub(r.(value.Value))
+			return l.Sub(r)
 		})
 
 	case compiler.OpMul:
 		return vm.numericOp(func(l, r value.Numeric) (value.Value, error) {
-			return l.Mul(r.(value.Value))
+			return l.Mul(r)
 		})
 
 	case compiler.OpDiv:
 		return vm.numericOp(func(l, r value.Numeric) (value.Value, error) {
-			return l.Div(r.(value.Value))
+			return l.Div(r)
 		})
 
 	case compiler.OpMod:
 		return vm.numericOp(func(l, r value.Numeric) (value.Value, error) {
-			return l.Mod(r.(value.Value))
+			return l.Mod(r)
 		})
 
 	case compiler.OpNeg:
 		val := vm.pop()
 		if n, ok := val.(value.Numeric); ok {
-			vm.push(n.Neg())
+			neg, err := n.Neg()
+			if err != nil {
+				return fmt.Errorf("failed to negate %s: %v", val.Type(), err)
+			}
+			vm.push(neg)
 		} else {
 			return fmt.Errorf("cannot negate %s", val.Type())
 		}
@@ -527,38 +525,6 @@ func (vm *VirtualMachine) toString(v value.Value) string {
 	return v.String()
 }
 
-func (vm *VirtualMachine) getAttribute(obj value.Value, name string) (value.Value, error) {
-	switch o := obj.(type) {
-	case *value.NamespaceValue:
-		// Get member from namespace (e.g., sys.stdin)
-		if v, ok := o.Get(name); ok {
-			return v, nil
-		}
-		return nil, fmt.Errorf("namespace '%s' has no member '%s'", o.Name(), name)
-	case *value.Metadata:
-		// Get metadata field (e.g., meta.key, meta.size, meta.isDir)
-		return o.GetField(name)
-	case *value.Map:
-		if v, ok := o.Get(name); ok {
-			return v, nil
-		}
-		return value.Nil, nil
-	case *value.Stream:
-		// Stream properties
-		switch name {
-		case "name":
-			return value.NewString(o.Name()), nil
-		case "closed":
-			return value.NewBoolean(o.IsClosed()), nil
-		case "canRead":
-			return value.NewBoolean(o.CanRead()), nil
-		case "canWrite":
-			return value.NewBoolean(o.CanWrite()), nil
-		}
-	}
-	return nil, fmt.Errorf("cannot get attribute '%s' from %s", name, obj.Type())
-}
-
 func (vm *VirtualMachine) callFunction(name string, argCount int) error {
 	// Check built-ins first
 	if builtin, ok := vm.builtins[name]; ok {
@@ -659,7 +625,7 @@ func (vm *VirtualMachine) callMethod(name string, argCount int) error {
 		}
 		if compare, ok1 := obj.(value.Comparable); ok1 {
 			if i, ok2 := compare.Compare(args[0]); ok2 {
-				result = value.NewInteger(int64(i))
+				result = value.NewInteger(i)
 			}
 		}
 	default:

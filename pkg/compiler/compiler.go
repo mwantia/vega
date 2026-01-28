@@ -492,7 +492,7 @@ func (c *Compiler) compileIndex(e *ast.IndexExpression) {
 
 func (c *Compiler) compileAttribute(e *ast.AttributeExpression) {
 	c.compileExpression(e.Object)
-	c.bytecode.EmitName(OpLoadAttr, e.Attribute.Value, e.Pos().Line)
+	c.bytecode.EmitName(OpLoadMember, e.Attribute.Value, e.Pos().Line)
 }
 
 func (c *Compiler) compileInterpolatedString(e *ast.InterpolatedString) {

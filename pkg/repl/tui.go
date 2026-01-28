@@ -1155,8 +1155,6 @@ func wrapText(s string, width int) []string {
 
 // formatValue pretty-prints a value with indentation and colors.
 func (m *Model) formatValue(v value.Value, indent int) string {
-	indentStr := strings.Repeat("  ", indent)
-
 	switch val := v.(type) {
 	case *value.Metadata:
 		return m.formatMetadata(val, indent)
@@ -1165,25 +1163,21 @@ func (m *Model) formatValue(v value.Value, indent int) string {
 	case *value.Array:
 		return m.formatArray(val, indent)
 	case *value.String:
-		return stringValueStyle.Render(fmt.Sprintf("%q", val.Value)) +
-			typeAnnotationStyle.Render(" (string)")
+		return stringValueStyle.Render(fmt.Sprintf("%q", val.String())) + typeAnnotationStyle.Render(" (string)")
+	case *value.Short:
+		return numberValueStyle.Render(val.String()) + typeAnnotationStyle.Render(" (short)")
 	case *value.Integer:
-		return numberValueStyle.Render(fmt.Sprintf("%d", val.Value)) +
-			typeAnnotationStyle.Render(" (integer)")
+		return numberValueStyle.Render(val.String()) + typeAnnotationStyle.Render(" (integer)")
+	case *value.Long:
+		return numberValueStyle.Render(val.String()) + typeAnnotationStyle.Render(" (long)")
 	case *value.Float:
-		return numberValueStyle.Render(fmt.Sprintf("%g", val.Value)) +
-			typeAnnotationStyle.Render(" (float)")
+		return numberValueStyle.Render(val.String()) + typeAnnotationStyle.Render(" (float)")
 	case *value.Boolean:
-		return boolValueStyle.Render(fmt.Sprintf("%t", val.Value)) +
-			typeAnnotationStyle.Render(" (boolean)")
-	case *value.Type:
-		return typeValueStyle.Render(fmt.Sprintf("%q", val.Value)) +
-			typeAnnotationStyle.Render(" (type)")
+		return boolValueStyle.Render(val.String()) + typeAnnotationStyle.Render(" (boolean)")
 	case *value.NilValue:
 		return nilValueStyle.Render("nil")
 	default:
-		// Fallback for unknown types
-		return indentStr + v.String()
+		return unknownValueStyle.Render(val.String()) + typeAnnotationStyle.Render(fmt.Sprintf(" (%s)", val.Type()))
 	}
 }
 
@@ -1312,15 +1306,13 @@ func (m *Model) formatMetadata(mv *value.Metadata, indent int) string {
 func (m *Model) formatValueInline(v value.Value) string {
 	switch val := v.(type) {
 	case *value.String:
-		return stringValueStyle.Render(fmt.Sprintf("%q", val.Value))
+		return stringValueStyle.Render(val.String())
 	case *value.Integer:
-		return numberValueStyle.Render(fmt.Sprintf("%d", val.Value))
+		return numberValueStyle.Render(val.String())
 	case *value.Float:
-		return numberValueStyle.Render(fmt.Sprintf("%g", val.Value))
+		return numberValueStyle.Render(val.String())
 	case *value.Boolean:
-		return boolValueStyle.Render(fmt.Sprintf("%t", val.Value))
-	case *value.Type:
-		return typeValueStyle.Render(fmt.Sprintf("%q", val.Value))
+		return boolValueStyle.Render(val.String())
 	case *value.NilValue:
 		return nilValueStyle.Render("nil")
 	case *value.Metadata:
@@ -1344,7 +1336,7 @@ func (m *Model) formatValueInline(v value.Value) string {
 		}
 		return bracketStyle.Render("[") + strings.Join(parts, ", ") + bracketStyle.Render("]")
 	default:
-		return v.String()
+		return unknownValueStyle.Render(v.String())
 	}
 }
 

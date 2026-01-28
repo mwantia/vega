@@ -51,7 +51,7 @@ func (a *Array) Equal(other Value) bool {
 func (v *Array) Method(name string, args []Value) (Value, error) {
 	switch name {
 	case "length":
-		i := int64(v.Len())
+		i := v.Length()
 		return NewInteger(i), nil
 	case "push":
 		if len(args) != 1 {
@@ -92,7 +92,7 @@ func (v *Array) Method(name string, args []Value) (Value, error) {
 		other := args[0]
 		for i, e := range v.Elements {
 			if e.Equal(other) {
-				return NewInteger(int64(i)), nil
+				return NewInteger(i), nil
 			}
 		}
 		return NewInteger(-1), nil
@@ -129,7 +129,7 @@ func (a *Array) Iterator() Iterator {
 	return &arrayIterator{arr: a, pos: -1}
 }
 
-func (a *Array) Len() int {
+func (a *Array) Length() int {
 	return len(a.Elements)
 }
 

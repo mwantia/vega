@@ -82,8 +82,8 @@ var (
 	numberValueStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("11"))
 
-	typeValueStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("14"))
+	unknownValueStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("14"))
 
 	boolValueStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("13"))

@@ -127,6 +127,6 @@ func (f *Float) Mod(other Value) (Value, error) {
 	return nil, fmt.Errorf("cannot modulo float by %s", other.Type())
 }
 
-func (f *Float) Neg() Value {
-	return NewFloat(-f.Value)
+func (f *Float) Neg() (Value, error) {
+	return NewFloat(-f.Value), nil
 }

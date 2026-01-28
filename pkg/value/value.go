@@ -5,7 +5,9 @@ package value
 const (
 	TypeType     = "type"
 	TypeString   = "string"
+	TypeShort    = "short"
 	TypeInt      = "integer"
+	TypeLong     = "long"
 	TypeFloat    = "float"
 	TypeBool     = "boolean"
 	TypeNil      = "nil"
@@ -13,6 +15,7 @@ const (
 	TypeMap      = "map"
 	TypeStream   = "stream"
 	TypeMetadata = "metadata"
+	TypeTime     = "time"
 )
 
 // Value represents a runtime value in Vega.
@@ -60,7 +63,7 @@ type Numeric interface {
 	Mul(other Value) (Value, error)
 	Div(other Value) (Value, error)
 	Mod(other Value) (Value, error)
-	Neg() Value
+	Neg() (Value, error)
 }
 
 // Indexable values can be accessed with []

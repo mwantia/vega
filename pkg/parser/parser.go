@@ -502,7 +502,7 @@ func (p *Parser) parseIntegerLiteral() *ast.IntegerLiteral {
 		return nil
 	}
 
-	lit.Value = value
+	lit.Value = int(value)
 	p.advance()
 	return lit
 }

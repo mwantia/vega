@@ -8,7 +8,7 @@ import (
 
 // Integer represents an integer value.
 type Integer struct {
-	Value int64
+	Value int
 }
 
 var _ Value = (*Integer)(nil)
@@ -16,7 +16,7 @@ var _ Numeric = (*Integer)(nil)
 var _ Comparable = (*Integer)(nil)
 var _ Methodable = (*Integer)(nil)
 
-func NewInteger(i int64) *Integer {
+func NewInteger(i int) *Integer {
 	return &Integer{Value: i}
 }
 
@@ -25,7 +25,7 @@ func (i *Integer) Type() string {
 }
 
 func (i *Integer) String() string {
-	return strconv.FormatInt(i.Value, 10)
+	return strconv.FormatInt(int64(i.Value), 10)
 }
 
 func (i *Integer) Boolean() bool {
@@ -129,6 +129,6 @@ func (i *Integer) Mod(other Value) (Value, error) {
 	return nil, fmt.Errorf("cannot modulo int by %s", other.Type())
 }
 
-func (i *Integer) Neg() Value {
-	return NewInteger(-i.Value)
+func (i *Integer) Neg() (Value, error) {
+	return NewInteger(-i.Value), nil
 }

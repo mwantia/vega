@@ -24,6 +24,7 @@ func (vm *VirtualMachine) registerBuiltinFunctions() {
 	vm.builtins["float"] = newBuiltinFloatFunction
 	vm.builtins["boolean"] = newBuiltinBooleanFunction
 	// Utility Functions
+	vm.builtins["now"] = newBuiltinNowFunction
 	vm.builtins["range"] = newBuiltinRangeFunction
 	vm.builtins["assert"] = newBuiltinAssertFunction
 	// VFS Functions

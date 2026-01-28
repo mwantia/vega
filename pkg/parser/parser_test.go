@@ -177,7 +177,7 @@ func TestPrefixExpressions(t *testing.T) {
 	tests := []struct {
 		input    string
 		operator string
-		value    int64
+		value    int
 	}{
 		{"-5", "-", 5},
 		{"!5", "!", 5},
@@ -214,9 +214,9 @@ func TestPrefixExpressions(t *testing.T) {
 func TestInfixExpressions(t *testing.T) {
 	tests := []struct {
 		input    string
-		left     int64
+		left     int
 		operator string
-		right    int64
+		right    int
 	}{
 		{"5 + 5", 5, "+", 5},
 		{"5 - 5", 5, "-", 5},
@@ -765,7 +765,7 @@ func TestPipeExpression(t *testing.T) {
 	}
 }
 
-func testIntegerLiteral(t *testing.T, expr ast.Expression, expected int64) {
+func testIntegerLiteral(t *testing.T, expr ast.Expression, expected int) {
 	t.Helper()
 
 	lit, ok := expr.(*ast.IntegerLiteral)

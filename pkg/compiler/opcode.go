@@ -13,7 +13,7 @@ const (
 	OpLoadConst
 	OpLoadVar
 	OpStoreVar
-	OpLoadAttr
+	OpLoadMember
 
 	// Arithmetic and logic
 	OpAdd
@@ -69,7 +69,7 @@ var opNames = map[OpCode]string{
 	OpLoadConst:  "LOAD_CONST",
 	OpLoadVar:    "LOAD_VAR",
 	OpStoreVar:   "STORE_VAR",
-	OpLoadAttr:   "LOAD_ATTR",
+	OpLoadMember: "LOAD_MEMB",
 	OpAdd:        "ADD",
 	OpSub:        "SUB",
 	OpMul:        "MUL",

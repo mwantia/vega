@@ -21,6 +21,7 @@ type Stream struct {
 	mu       sync.Mutex
 }
 
+var _ Memberable = (*Metadata)(nil)
 var _ Methodable = (*Stream)(nil)
 
 // NewInputStream creates a read-only stream.
@@ -87,17 +88,31 @@ func (s *Stream) Equal(other Value) bool {
 	return false
 }
 
-func (v *Stream) Method(name string, args []Value) (Value, error) {
+func (v *Stream) GetMember(name string) (Value, error) {
 	switch name {
+	case "name":
+		// returns true if the stream supports reading
+		return NewString(v.Name()), nil
 	case "canread":
 		// returns true if the stream supports reading
 		return NewBoolean(v.CanRead()), nil
 	case "canwrite":
 		// returns true if the stream supports writing
 		return NewBoolean(v.CanWrite()), nil
-	case "isclosed":
+	case "closed":
 		// returns true if the stream is closed
 		return NewBoolean(v.IsClosed()), nil
+	}
+
+	return nil, fmt.Errorf("unknown membername defined")
+}
+
+func (v *Stream) SetMember(name string, val Value) (bool, error) {
+	return false, fmt.Errorf("members are readonly")
+}
+
+func (v *Stream) Method(name string, args []Value) (Value, error) {
+	switch name {
 	case "read":
 		// reads all available data from the stream
 		return v.Read()
@@ -145,7 +160,7 @@ func (v *Stream) Method(name string, args []Value) (Value, error) {
 		if err != nil {
 			return nil, fmt.Errorf("copy failed: %w", err)
 		}
-		return NewInteger(n), nil
+		return NewLong(n), nil
 	case "flush":
 		// flushes any buffered data
 		return NewNil(), v.Flush()
@@ -272,7 +287,7 @@ func (s *Stream) Write(data Value) (Value, error) {
 		return Nil, err
 	}
 
-	return NewInteger(int64(n)), nil
+	return NewInteger(n), nil
 }
 
 // WriteLine writes data followed by a newline.
@@ -293,7 +308,7 @@ func (s *Stream) WriteLine(data Value) (Value, error) {
 		return Nil, err
 	}
 
-	return NewInteger(int64(n)), nil
+	return NewInteger(n), nil
 }
 
 // Close closes the stream.
