@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"strings"
@@ -330,59 +329,5 @@ func newBuiltinExecFunction(vm *VirtualMachine, args []value.Value) (value.Value
 		cmdArgs[i] = arg.String()
 	}
 
-	exitCode, err := vm.vfs.Execute(vm.Context(), vm.stdout, cmdArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("exec failed: %w", err)
-	}
-
-	return value.NewInteger(exitCode), nil
-}
-
-// sexec(command...) - executes a VFS command with VM's stdin/stdout/stderr
-// Returns exit code
-func newBuiltinSexecFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
-	if vm.vfs == nil {
-		return nil, fmt.Errorf("no VFS attached")
-	}
-	if len(args) < 1 {
-		return nil, fmt.Errorf("sexec expects at least 1 argument (command), got %d", len(args))
-	}
-
-	// Convert args to strings
-	cmdArgs := make([]string, len(args))
-	for i, arg := range args {
-		cmdArgs[i] = arg.String()
-	}
-
-	exitCode, err := vm.vfs.ExecuteWithStreams(vm.Context(), vm.stdin, vm.stdout, vm.stderr, cmdArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("sexec failed: %w", err)
-	}
-
-	return value.NewInteger(exitCode), nil
-}
-
-// capture(command...) - executes a VFS command and returns output as string
-func newBuiltinCaptureFunction(vm *VirtualMachine, args []value.Value) (value.Value, error) {
-	if vm.vfs == nil {
-		return nil, fmt.Errorf("no VFS attached")
-	}
-	if len(args) < 1 {
-		return nil, fmt.Errorf("capture expects at least 1 argument (command), got %d", len(args))
-	}
-
-	// Convert args to strings
-	cmdArgs := make([]string, len(args))
-	for i, arg := range args {
-		cmdArgs[i] = arg.String()
-	}
-
-	// Capture output to buffer
-	var buf bytes.Buffer
-	_, err := vm.vfs.Execute(vm.Context(), &buf, cmdArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("capture failed: %w", err)
-	}
-
-	return value.NewString(buf.String()), nil
+	return value.NewInteger(0), nil
 }

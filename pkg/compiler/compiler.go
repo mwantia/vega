@@ -206,7 +206,9 @@ func (c *Compiler) compileFunction(s *ast.FunctionDefinition) {
 	// Compile function body
 	funcCompiler.compileBlock(s.Body)
 
-	// Ensure there's a return
+	// Ensure there's an implicit return nil at the end
+	nilIdx := funcCompiler.bytecode.AddConstant(value.Nil)
+	funcCompiler.bytecode.EmitArg(OpLoadConst, nilIdx, line)
 	funcCompiler.bytecode.Emit(OpReturn, line)
 
 	// Store function info as a constant

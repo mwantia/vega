@@ -40,6 +40,4 @@ func (vm *VirtualMachine) registerBuiltinFunctions() {
 	// VFS Stream/Exec Functions
 	vm.builtins["open"] = newBuiltinOpenFunction
 	vm.builtins["exec"] = newBuiltinExecFunction
-	vm.builtins["sexec"] = newBuiltinSexecFunction
-	vm.builtins["capture"] = newBuiltinCaptureFunction
 }

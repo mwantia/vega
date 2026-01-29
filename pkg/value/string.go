@@ -114,6 +114,24 @@ func (v *String) Method(name string, args []Value) (Value, error) {
 			return nil, fmt.Errorf("method '%s' first argument must be 'string', got '%s'", name, args[0].Type())
 		}
 		return NewInteger(strings.Index(v.Value, sub.Value)), nil
+	case "trimprefix":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("method '%s' expects 1 arguments, got %d", name, len(args))
+		}
+		prefix, ok := args[0].(*String)
+		if !ok {
+			return nil, fmt.Errorf("method '%s' first argument must be 'string', got '%s'", name, args[0].Type())
+		}
+		return NewString(strings.TrimPrefix(v.Value, prefix.Value)), nil
+	case "trimsuffix":
+		if len(args) != 1 {
+			return nil, fmt.Errorf("method '%s' expects 1 arguments, got %d", name, len(args))
+		}
+		suffix, ok := args[0].(*String)
+		if !ok {
+			return nil, fmt.Errorf("method '%s' first argument must be 'string', got '%s'", name, args[0].Type())
+		}
+		return NewString(strings.TrimSuffix(v.Value, suffix.Value)), nil
 	}
 
 	return nil, fmt.Errorf("unknown method-map: '%s'", name)
