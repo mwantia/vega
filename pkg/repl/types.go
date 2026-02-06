@@ -33,6 +33,7 @@ type OutputLine struct {
 	Text       string
 	Type       OutputType
 	HistoryIdx int
+	Duration   time.Duration // Execution time for command lines
 }
 
 // Status represents the REPL status.

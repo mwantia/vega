@@ -106,9 +106,6 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		if m.status == StatusExecuting {
 			// Cancel the running execution
-			if m.execCancel != nil {
-				m.execCancel()
-			}
 			m.vm.Cancel()
 			m.status = StatusReady
 			m.statusMsg = "Interrupted"
@@ -371,8 +368,12 @@ func (m *Model) execute(input string) {
 		return
 	}
 
-	// Add command to output
+	// Start timing
+	startTime := time.Now()
+
+	// Add command to output and remember its index
 	cmdIdx := m.commandIndex
+	cmdOutputIdx := len(m.output)
 	m.addOutput(fmt.Sprintf("[%d] vega $ %s", cmdIdx, input), OutputCommand, cmdIdx)
 
 	// Add to history
@@ -388,6 +389,7 @@ func (m *Model) execute(input string) {
 	l := lexer.New(input)
 	tokens, err := l.Tokenize()
 	if err != nil {
+		m.output[cmdOutputIdx].Duration = time.Since(startTime)
 		m.addOutput(fmt.Sprintf("Syntax error: %v", err), OutputError, cmdIdx)
 		m.status = StatusError
 		m.statusMsg = "Syntax error"
@@ -398,6 +400,7 @@ func (m *Model) execute(input string) {
 	p := parser.New(tokens)
 	program, err := p.Parse()
 	if err != nil {
+		m.output[cmdOutputIdx].Duration = time.Since(startTime)
 		m.addOutput(fmt.Sprintf("Parse error: %v", err), OutputError, cmdIdx)
 		m.status = StatusError
 		m.statusMsg = "Parse error"
@@ -408,6 +411,7 @@ func (m *Model) execute(input string) {
 	c := compiler.New()
 	bytecode, err := c.Compile(program)
 	if err != nil {
+		m.output[cmdOutputIdx].Duration = time.Since(startTime)
 		m.addOutput(fmt.Sprintf("Compile error: %v", err), OutputError, cmdIdx)
 		m.status = StatusError
 		m.statusMsg = "Compile error"
@@ -426,28 +430,20 @@ func (m *Model) execute(input string) {
 	m.vm.SetStdout(&m.outputCapture)
 	m.vm.SetStderr(&m.errorCapture)
 
-	// Create a fresh cancellable context for this execution
-	m.execCtx, m.execCancel = context.WithCancel(context.Background())
-	m.vm.SetContext(m.execCtx)
-
 	// Execute
 	m.status = StatusExecuting
 	m.statusMsg = "Executing..."
 
 	_, err = m.vm.Run(bytecode)
 
-	// Check if context was cancelled before cleanup (indicates user interrupt)
-	wasInterrupted := m.execCtx.Err() == context.Canceled
-
-	// Clean up execution context
-	if m.execCancel != nil {
-		m.execCancel()
-		m.execCancel = nil
-	}
+	// Record duration
+	m.output[cmdOutputIdx].Duration = time.Since(startTime)
 
 	if err != nil {
-		// Check if this was a cancellation (user interrupted)
-		if err == context.Canceled || wasInterrupted {
+		// Check if this was a cancellation (user interrupted via Ctrl+C)
+		if err == context.Canceled {
+			// Reset VM context so subsequent commands can run
+			m.vm.SetContext(context.Background())
 			m.addOutput("Execution interrupted", OutputInfo, cmdIdx)
 			m.status = StatusReady
 			m.statusMsg = "Interrupted"
@@ -664,6 +660,23 @@ func isWordChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
 }
 
+// formatDuration formats a duration in a human-readable format.
+func formatDuration(d time.Duration) string {
+	if d < time.Microsecond {
+		return fmt.Sprintf("%dns", d.Nanoseconds())
+	}
+	if d < time.Millisecond {
+		return fmt.Sprintf("%.1fµs", float64(d.Nanoseconds())/1000)
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%.1fms", float64(d.Nanoseconds())/1e6)
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return fmt.Sprintf("%.1fm", d.Minutes())
+}
+
 func (m Model) inputWidth() int {
 	if m.showDisasm {
 		return int(float64(m.width) * 0.65)
@@ -754,8 +767,8 @@ func (m Model) renderMainPane(width, height int) string {
 	for _, out := range m.output {
 		switch out.Type {
 		case OutputCommand:
-			// Split styling: [N] in grey, "vega $" bold, command in grey
-			// Format is "[N] vega $ command"
+			// Split styling: [N] in grey, "vega $" bold, command in grey, duration in italic
+			// Format is "[N] vega $ command duration"
 			text := out.Text
 			if idx := strings.Index(text, "vega $ "); idx != -1 {
 				prefix := text[:idx]             // "[N] "
@@ -765,6 +778,11 @@ func (m Model) renderMainPane(width, height int) string {
 				styledLine := indexStyle.Render(prefix) +
 					promptStyle.Render(prompt) +
 					historyCommandStyle.Render(cmd)
+
+				// Add duration if available
+				if out.Duration > 0 {
+					styledLine += " " + durationStyle.Render(formatDuration(out.Duration))
+				}
 				lines = append(lines, styledLine)
 			} else {
 				lines = append(lines, historyCommandStyle.Render(text))

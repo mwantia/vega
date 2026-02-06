@@ -6,7 +6,6 @@ env:
     GOOS: linux
     MAIN_PATH: ./cmd/vega/main.go
     BUILD_PATH: ./build/vega
-    MOUNT_URI: ephemeral://
 
 dotenv: ['.env']
 
@@ -51,7 +50,7 @@ tasks:
     run:
         desc: Run the agent with the test configuration
         cmds:
-        - ${BUILD_PATH} ${MOUNT_URI} {{.CLI_ARGS}}
+        - ${BUILD_PATH} {{.CLI_ARGS}}
         ignore_error: true
 
     test:

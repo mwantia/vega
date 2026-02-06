@@ -36,6 +36,19 @@ type VirtualMachine struct {
 
 	// Iteration state (for for-loops)
 	iterators map[string]value.Iterator
+
+	// Execution trace (for debugging)
+	traceEnabled bool
+	trace        []TraceEntry
+}
+
+// TraceEntry records a single executed instruction for debugging.
+type TraceEntry struct {
+	FrameIndex int                  // Call frame depth
+	IP         int                  // Instruction pointer before execution
+	Instr      compiler.Instruction // The instruction that was executed
+	StackTop   string               // String representation of top-of-stack after execution
+	StackDepth int                  // Stack pointer after execution
 }
 
 // CallFrame represents a function call frame.

@@ -4,6 +4,7 @@ Vega is a dynamically-typed scripting language with Python-like syntax, designed
 
 ## Table of Contents
 
+- [Syntax Rework](#syntax-rework)
 - [Syntax Basics](#syntax-basics)
 - [Data Types](#data-types)
 - [Variables](#variables)
@@ -24,6 +25,156 @@ Vega is a dynamically-typed scripting language with Python-like syntax, designed
 - [Complete Examples](#complete-examples)
 
 ---
+
+## Syntax Rework
+
+## Methods and Calls
+
+| FullName         | Alias        | Parameters                       | Return Types | Description                                                      |
+|------------------|--------------|----------------------------------|--------------|------------------------------------------------------------------|
+| `vfs.mount()`    | `mount()`    | `"path"`, `"uri"`                | `result`     | Attaches a filesystem handler at the specified path              |
+| `vfs.umount()`   | `umount()`   | `"path"`                         | `result`     | Removes the filesystem handler at the specified path             |
+| `vfs.open()`     | `open()`     | `"path"`, `<mode>`, `[flags]`    | `handler`    | Opens a new filehandler with specified access mode flag          |
+| `vfs.close()`    | `close()`    | `"path"`                         | `result`     | Closes all open handlers associated with the specified path      |
+| `vfs.create()`   | `create()`   | `"path"`, `<flags>`              | `result`     | Create a file/folder for the specified path and return result    |
+| `vfs.read()`     | `read()`     | `"path"`, `<offset>`, `<size>`   | `buffer`     | Reads size bytes from the file at path starting at offset        |
+| `vfs.write()`    | `write()`    | `"path"`, `<offset>`, `<buffer>` | `integer`    | Writes data to the file at path starting at offset               |
+| `vfs.sync()`     | `sync()`     | `"path"`                         | `result`     | Synchronizes all buffers and commits for the specified path      |
+| `vfs.lookup()`   | `lookup()`   | `"path"`                         | `metadata`   | Returns file information/metadata for the given path             |
+| `vfs.exists()`   | `exists()`   | `"path"`                         | `boolean`    | Checks if a file or directory exists at the given path           |
+| `vfs.rename()`   | `rename()`   | `"old_path"`, `"new_path"`       | `result`     | Moves or renames a file or directory from onePath to another     |
+| `vfs.remove()`   | `remove`     | `"path"`, `[force]`              | `result`     | Removes a file or directory at the specified path                |
+| `vfs.list()`     | `list()`     | `"path"`                         | `array`      | Returns a list of file metadata in the directory at path         |
+| `vfs.getattr()`  | `getattr()`  | `"path"`, `"key"`                | `string`     | Read file metadata for the specified path and key                |
+| `vfs.setattr()`  | `getattr()`  | `"path"`, `"key"`, `<value>`     | `result`     | Writes/Updates file metadata for the specified path and key      |
+| `vfs.listattr()` | `listattr()` | `"path"`                         | `map`        | List all file attribute map for the specified path               |
+
+## New extended types
+
+| Type        | Description                                 | Name          | Examples                                                            |
+|-------------|---------------------------------------------|---------------|---------------------------------------------------------------------|
+| `metadata`  | Metadata handler for transaction operations | `"metadata"`  | `meta.set("content-type", "text/html")`, `meta.commit() (result)`   |
+| `slice`    | Current solution for data like `[]byte`     | `"slice"`    | `slice.seek(0) (boolean)`, `slice.wtext("Hello World") (integer)` |
+| `result`    | Replacement for `error` or `exception`      | `"result"`    | `result.success (boolean)`, `result.error (string)`                 |
+| `handler`   | I/O filehandler for stream operations       | `"handler"`   | `file.canwrite (boolean)`, `file.read(512) (integer)`               | 
+
+### Metadata
+
+#### Properties
+
+| Name        | Type      | Description                       |
+|-------------|-----------|-----------------------------------|
+| id          | `string`  | Unique identifier for metadata    |
+| key         | `string`  | Relative key within the service   |
+| mode        | `integer` | Unix-style mode and permissions   |
+| size        | `long`    | Size in bytes (0 for directories) |
+| accesstime  | `time`    |                                   |
+| modifytime  | `time`    |                                   |
+| createtime  | `time`    |                                   |
+| uid         | `long`    | User ownership identity           |
+| gid         | `long`    | Group ownership identity          |
+| contenttype | `string`  | Content MIME type                 |
+| attributes  | `map`     | Extended attributes               |
+| etag        | `string`  | Entity tag hash                   |
+
+#### Methods
+
+| Name   | Parameters         | Return Type | Description |
+|--------|--------------------|-------------|-------------|
+| get    | `string`           | `string`    |             |
+| set    | `string`, `string` |             |             |
+| remove | `string`           | `result`    |             |
+| list   |                    | `map`       |             |
+| commit |                    | `result`    |             |
+| revert |                    | `result`    |             |
+
+### Slice
+
+#### Properties
+
+| Name        | Type      | Description                       |
+|-------------|-----------|-----------------------------------|
+| id          | `string`  | Unique identifier for metadata    |
+| key         | `string`  | Relative key within the service   |
+| mode        | `integer` | Unix-style mode and permissions   |
+| size        | `long`    | Size in bytes (0 for directories) |
+| accesstime  | `time`    |                                   |
+| modifytime  | `time`    |                                   |
+| createtime  | `time`    |                                   |
+| uid         | `long`    | User ownership identity           |
+| gid         | `long`    | Group ownership identity          |
+| contenttype | `string`  | Content MIME type                 |
+| attributes  | `map`     | Extended attributes               |
+| etag        | `string`  | Entity tag hash                   |
+
+#### Methods
+
+| Name   | Parameters         | Return Type | Description |
+|--------|--------------------|-------------|-------------|
+| read   | `integer`          | `slice`     |             |
+| write  | `string`, `string` |             |             |
+| seek   | `string`           | `result`    |             |
+| copy   |                    | `map`       |             |
+
+### Result
+
+#### Properties
+
+| Name        | Type      | Description                       |
+|-------------|-----------|-----------------------------------|
+| id          | `string`  | Unique identifier for metadata    |
+| key         | `string`  | Relative key within the service   |
+| mode        | `integer` | Unix-style mode and permissions   |
+| size        | `long`    | Size in bytes (0 for directories) |
+| accesstime  | `time`    |                                   |
+| modifytime  | `time`    |                                   |
+| createtime  | `time`    |                                   |
+| uid         | `long`    | User ownership identity           |
+| gid         | `long`    | Group ownership identity          |
+| contenttype | `string`  | Content MIME type                 |
+| attributes  | `map`     | Extended attributes               |
+| etag        | `string`  | Entity tag hash                   |
+
+#### Methods
+
+| Name   | Parameters         | Return Type | Description |
+|--------|--------------------|-------------|-------------|
+| get    | `string`           | `string`    |             |
+| set    | `string`, `string` |             |             |
+| remove | `string`           | `result`    |             |
+| list   |                    | `map`       |             |
+| commit |                    | `result`    |             |
+| revert |                    | `result`    |             |
+
+### Handler
+
+#### Properties
+
+| Name        | Type      | Description                       |
+|-------------|-----------|-----------------------------------|
+| id          | `string`  | Unique identifier for metadata    |
+| key         | `string`  | Relative key within the service   |
+| mode        | `integer` | Unix-style mode and permissions   |
+| size        | `long`    | Size in bytes (0 for directories) |
+| accesstime  | `time`    |                                   |
+| modifytime  | `time`    |                                   |
+| createtime  | `time`    |                                   |
+| uid         | `long`    | User ownership identity           |
+| gid         | `long`    | Group ownership identity          |
+| contenttype | `string`  | Content MIME type                 |
+| attributes  | `map`     | Extended attributes               |
+| etag        | `string`  | Entity tag hash                   |
+
+#### Methods
+
+| Name   | Parameters         | Return Type | Description |
+|--------|--------------------|-------------|-------------|
+| get    | `string`           | `string`    |             |
+| set    | `string`, `string` |             |             |
+| remove | `string`           | `result`    |             |
+| list   |                    | `map`       |             |
+| commit |                    | `result`    |             |
+| revert |                    | `result`    |             |
 
 ## Syntax Basics
 

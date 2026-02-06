@@ -79,8 +79,14 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 				}
 			}
 
+			trace, _ := cmd.Flags().GetBool("trace")
+
 			vm := createVM(ctx, fs)
 			defer vm.Shutdown()
+
+			if trace {
+				vm.EnableTrace()
+			}
 
 			if bytecode != nil {
 				if disasm {
@@ -90,6 +96,9 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 
 				exitCode, err := vm.Run(bytecode)
 				if err != nil {
+					if trace {
+						fmt.Fprintln(os.Stderr, vm.FormatTrace())
+					}
 					return fmt.Errorf("runtime error: %w", err)
 				}
 
@@ -110,6 +119,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 	cmd.Flags().StringP("command", "c", "", "Execute a single Vega command")
 	cmd.Flags().StringP("script", "s", "", "Execute a Vega script file")
 	cmd.Flags().BoolP("disasm", "d", false, "Show disassembled bytecode (debug)")
+	cmd.Flags().BoolP("trace", "t", false, "Enable execution tracing (shown on error)")
 	// Set version used by './vega version'
 	cmd.Version = fmt.Sprintf("%s.%s", info.Version, info.Commit)
 

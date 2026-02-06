@@ -156,7 +156,18 @@ func (v *Stream) Method(name string, args []Value) (Value, error) {
 		if !dest.CanWrite() {
 			return nil, fmt.Errorf("destination stream is not writable")
 		}
-		n, err := io.Copy(dest.Writer(), v.Reader())
+		var n int64
+		var err error
+		// Prefer WriterTo/ReaderFrom if the underlying streams support them,
+		// so VFS streaming handlers can use their own optimized buffered transfers
+		// instead of io.Copy's default 32KB buffer.
+		if wt, ok := v.reader.(io.WriterTo); ok {
+			n, err = wt.WriteTo(dest.writer)
+		} else if rf, ok := dest.writer.(io.ReaderFrom); ok {
+			n, err = rf.ReadFrom(v.reader)
+		} else {
+			n, err = io.Copy(dest.writer, v.reader)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("copy failed: %w", err)
 		}

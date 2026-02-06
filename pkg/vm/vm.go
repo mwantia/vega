@@ -143,6 +143,52 @@ func (vm *VirtualMachine) Reset() {
 	vm.iterators = make(map[string]value.Iterator)
 }
 
+// EnableTrace enables execution tracing on the VM.
+func (vm *VirtualMachine) EnableTrace() {
+	vm.traceEnabled = true
+	vm.trace = make([]TraceEntry, 0, 256)
+}
+
+// FormatTrace formats the recorded trace as a human-readable string.
+// Output is limited to the last 50 entries to avoid flooding the terminal.
+func (vm *VirtualMachine) FormatTrace() string {
+	if len(vm.trace) == 0 {
+		return ""
+	}
+
+	const maxDisplay = 50
+	var sb strings.Builder
+
+	start := 0
+	total := len(vm.trace)
+	if total > maxDisplay {
+		start = total - maxDisplay
+		fmt.Fprintf(&sb, "=== Execution Trace (last %d of %d entries) ===\n", maxDisplay, total)
+	} else {
+		fmt.Fprintf(&sb, "=== Execution Trace (%d entries) ===\n", total)
+	}
+
+	sb.WriteString(fmt.Sprintf(" %-6s| %-6s| %-4s| %-5s| %-25s| %-19s| %s\n",
+		"STEP", "FRAME", "IP", "LINE", "INSTRUCTION", "STACK TOP", "DEPTH"))
+	sb.WriteString("-------|-------|-----|------|--------------------------|--------------------|---------\n")
+
+	for i := start; i < total; i++ {
+		e := vm.trace[i]
+		instrStr := e.Instr.String()
+		if len(instrStr) > 25 {
+			instrStr = instrStr[:22] + "..."
+		}
+		stackTop := e.StackTop
+		if len(stackTop) > 19 {
+			stackTop = stackTop[:16] + "..."
+		}
+		sb.WriteString(fmt.Sprintf(" %5d | %5d | %3d | %4d | %-25s| %-19s| %5d\n",
+			i+1, e.FrameIndex, e.IP, e.Instr.Line, instrStr, stackTop, e.StackDepth))
+	}
+
+	return sb.String()
+}
+
 // Run executes bytecode and returns the exit code.
 func (vm *VirtualMachine) Run(bytecode *compiler.Bytecode) (int, error) {
 	// Create initial frame
@@ -195,9 +241,13 @@ func (vm *VirtualMachine) execute() error {
 		instr := frame.bytecode.Instructions[frame.ip]
 		frame.ip++
 
+		ip := frame.ip - 1 // IP before this instruction (we already incremented)
 		err := vm.executeInstruction(instr, frame)
 		if err != nil {
 			if err == errReturn {
+				if vm.traceEnabled {
+					vm.recordTrace(vm.frameIndex, ip, instr)
+				}
 				if vm.frameIndex == 0 {
 					return nil
 				}
@@ -205,6 +255,10 @@ func (vm *VirtualMachine) execute() error {
 				continue
 			}
 			return fmt.Errorf("line %d: %w", instr.Line, err)
+		}
+
+		if vm.traceEnabled {
+			vm.recordTrace(vm.frameIndex, ip, instr)
 		}
 	}
 }
@@ -451,6 +505,21 @@ func (vm *VirtualMachine) executeInstruction(instr compiler.Instruction, frame *
 	}
 
 	return nil
+}
+
+func (vm *VirtualMachine) recordTrace(frameIndex, ip int, instr compiler.Instruction) {
+	top := "<empty>"
+	if vm.sp > 0 {
+		v := vm.stack[vm.sp-1]
+		top = fmt.Sprintf("%s (%s)", v.String(), v.Type())
+	}
+	vm.trace = append(vm.trace, TraceEntry{
+		FrameIndex: frameIndex,
+		IP:         ip,
+		Instr:      instr,
+		StackTop:   top,
+		StackDepth: vm.sp,
+	})
 }
 
 // Stack operations

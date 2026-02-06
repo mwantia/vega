@@ -97,4 +97,9 @@ var (
 	typeAnnotationStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("8")).
 				Italic(true)
+
+	// Style for execution duration display
+	durationStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")).
+			Italic(true)
 )

@@ -1,7 +1,6 @@
 package repl
 
 import (
-	"context"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -12,10 +11,6 @@ import (
 type Model struct {
 	// VM and execution
 	vm *vm.VirtualMachine
-
-	// Execution context for cancellation
-	execCtx    context.Context
-	execCancel context.CancelFunc
 
 	// Input state
 	textInput   textinput.Model
