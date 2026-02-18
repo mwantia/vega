@@ -10,7 +10,6 @@ import (
 	"github.com/mwantia/vega/pkg/lexer"
 	"github.com/mwantia/vega/pkg/parser"
 	"github.com/mwantia/vega/pkg/repl"
-	"github.com/mwantia/vega/pkg/value"
 	"github.com/mwantia/vega/pkg/vm"
 	"github.com/mwantia/vfs"
 	"github.com/mwantia/vfs/mount"
@@ -58,7 +57,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 			interactive, _ := cmd.Flags().GetBool("interactive")
 			disasm, _ := cmd.Flags().GetBool("disasm")
 
-			var bytecode *compiler.Bytecode
+			var bytecode *compiler.ByteCode
 
 			if script, _ := cmd.Flags().GetString("script"); script != "" {
 				content, err := os.ReadFile(script)
@@ -81,28 +80,28 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 
 			trace, _ := cmd.Flags().GetBool("trace")
 
-			vm := createVM(ctx, fs)
-			defer vm.Shutdown()
+			vm := vm.NewVM(fs)
+			// defer vm.Shutdown()
 
 			if trace {
-				vm.EnableTrace()
+				// vm.EnableTrace()
 			}
 
 			if bytecode != nil {
 				if disasm {
-					fmt.Println(bytecode.Disassemble())
+					// fmt.Println(bytecode.Disassemble())
 					fmt.Println("--- Execution ---")
 				}
 
-				exitCode, err := vm.Run(bytecode)
+				_, err := vm.Run(ctx, bytecode)
 				if err != nil {
-					if trace {
+					/* if trace {
 						fmt.Fprintln(os.Stderr, vm.FormatTrace())
-					}
+					} */
 					return fmt.Errorf("runtime error: %w", err)
 				}
 
-				vm.SetGlobal("exitcode", value.NewInteger(exitCode))
+				// vm.SetGlobal("exitcode", value.NewInteger(exitCode))
 				// If interactive is 'false' (default), close immediately to avoid running vega
 				if !interactive {
 					return fs.Shutdown(ctx)
@@ -126,35 +125,27 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 	return cmd
 }
 
-func compile(input string) (*compiler.Bytecode, error) {
-	l := lexer.New(input)
-	tokens, err := l.Tokenize()
+func compile(input string) (*compiler.ByteCode, error) {
+	l, err := lexer.NewLexer(input)
+	if err != nil {
+		return nil, fmt.Errorf("syntax error: %w", err)
+	}
+	buffer, err := l.Tokenize()
 	if err != nil {
 		return nil, fmt.Errorf("syntax error: %w", err)
 	}
 
-	p := parser.New(tokens)
-	program, err := p.Parse()
+	p := parser.NewParser()
+	program, err := p.MakeProgram(buffer)
 	if err != nil {
 		return nil, fmt.Errorf("parse error: %w", err)
 	}
 
-	c := compiler.New()
+	c := compiler.NewCompiler()
 	bytecode, err := c.Compile(program)
 	if err != nil {
 		return nil, fmt.Errorf("compile error: %w", err)
 	}
 
 	return bytecode, nil
-}
-
-func createVM(ctx context.Context, fs vfs.VirtualFileSystem) *vm.VirtualMachine {
-	v := vm.NewVirtualMachine()
-	v.SetContext(ctx)
-	v.SetVFS(fs)
-	v.SetStdout(os.Stdout)
-	v.SetStderr(os.Stderr)
-	v.SetStdin(os.Stdin)
-
-	return v
 }

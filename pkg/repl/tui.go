@@ -13,12 +13,11 @@ import (
 	"github.com/mwantia/vega/pkg/compiler"
 	"github.com/mwantia/vega/pkg/lexer"
 	"github.com/mwantia/vega/pkg/parser"
-	"github.com/mwantia/vega/pkg/value"
 	"github.com/mwantia/vega/pkg/vm"
 )
 
 // NewTUI creates a new TUI REPL model.
-func NewTUI(v *vm.VirtualMachine, disasm bool) Model {
+func NewTUI(v vm.VirtualMachine, disasm bool) Model {
 	ti := textinput.New()
 	ti.Prompt = "" // Remove default "> " prompt
 	ti.Placeholder = ""
@@ -106,7 +105,7 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		if m.status == StatusExecuting {
 			// Cancel the running execution
-			m.vm.Cancel()
+			// m.vm.Cancel()
 			m.status = StatusReady
 			m.statusMsg = "Interrupted"
 			return m, nil
@@ -386,8 +385,8 @@ func (m *Model) execute(input string) {
 	m.historyIndex = -1
 
 	// Lexer
-	l := lexer.New(input)
-	tokens, err := l.Tokenize()
+	l, _ := lexer.NewLexer(input)
+	buffer, err := l.Tokenize()
 	if err != nil {
 		m.output[cmdOutputIdx].Duration = time.Since(startTime)
 		m.addOutput(fmt.Sprintf("Syntax error: %v", err), OutputError, cmdIdx)
@@ -397,8 +396,8 @@ func (m *Model) execute(input string) {
 	}
 
 	// Parser
-	p := parser.New(tokens)
-	program, err := p.Parse()
+	p := parser.NewParser()
+	program, err := p.MakeProgram(buffer)
 	if err != nil {
 		m.output[cmdOutputIdx].Duration = time.Since(startTime)
 		m.addOutput(fmt.Sprintf("Parse error: %v", err), OutputError, cmdIdx)
@@ -408,7 +407,7 @@ func (m *Model) execute(input string) {
 	}
 
 	// Compiler
-	c := compiler.New()
+	c := compiler.NewCompiler()
 	bytecode, err := c.Compile(program)
 	if err != nil {
 		m.output[cmdOutputIdx].Duration = time.Since(startTime)
@@ -427,14 +426,14 @@ func (m *Model) execute(input string) {
 	m.errorCapture.Reset()
 
 	// Create output writer that captures to our buffer
-	m.vm.SetStdout(&m.outputCapture)
-	m.vm.SetStderr(&m.errorCapture)
+	m.vm.Stdout(&m.outputCapture)
+	m.vm.Stderr(&m.errorCapture)
 
 	// Execute
 	m.status = StatusExecuting
 	m.statusMsg = "Executing..."
 
-	_, err = m.vm.Run(bytecode)
+	_, err = m.vm.Run(context.Background(), bytecode)
 
 	// Record duration
 	m.output[cmdOutputIdx].Duration = time.Since(startTime)
@@ -443,7 +442,7 @@ func (m *Model) execute(input string) {
 		// Check if this was a cancellation (user interrupted via Ctrl+C)
 		if err == context.Canceled {
 			// Reset VM context so subsequent commands can run
-			m.vm.SetContext(context.Background())
+			// m.vm.SetContext(context.Background())
 			m.addOutput("Execution interrupted", OutputInfo, cmdIdx)
 			m.status = StatusReady
 			m.statusMsg = "Interrupted"
@@ -471,14 +470,14 @@ func (m *Model) execute(input string) {
 
 	// Show expression result only if showResults is enabled
 	if m.showResults {
-		if result := m.vm.LastPopped(); result != nil {
+		/* if result := m.vm.LastPopped(); result != nil {
 			if result.Type() != "nil" {
 				formatted := m.formatValue(result, 0)
 				for _, line := range strings.Split(formatted, "\n") {
 					m.addOutput(line, OutputNormal, cmdIdx)
 				}
 			}
-		}
+		} */
 	}
 
 	m.status = StatusReady
@@ -859,8 +858,8 @@ func (m Model) renderDisasmPane(width, height int) string {
 	if m.lastBytecode == "" {
 		lines = append(lines, disasmStyle.Render("(no bytecode)"))
 	} else {
-		disasmLines := strings.Split(m.lastBytecode, "\n")
-		for _, line := range disasmLines {
+		disasmLines := strings.SplitSeq(m.lastBytecode, "\n")
+		for line := range disasmLines {
 			styled := m.styleBytecode(line)
 			lines = append(lines, truncateToWidth(styled, width))
 		}
@@ -1052,17 +1051,9 @@ func (m Model) renderAutocompleteOverlay(base string) string {
 }
 
 // padOrTruncate ensures a string is exactly the given width.
-// Uses ANSI-aware width calculation.
+// Uses lipgloss for ANSI-aware width handling to avoid cursor blink artifacts.
 func padOrTruncate(s string, width int) string {
-	currentWidth := lipgloss.Width(s)
-	if currentWidth == width {
-		return s
-	}
-	if currentWidth < width {
-		return s + strings.Repeat(" ", width-currentWidth)
-	}
-	// Truncate - need to be careful with ANSI codes
-	return truncateToWidth(s, width)
+	return lipgloss.NewStyle().Width(width).MaxWidth(width).Render(s)
 }
 
 // truncateToWidth truncates a string to fit within the given width.
@@ -1172,7 +1163,7 @@ func wrapText(s string, width int) []string {
 }
 
 // formatValue pretty-prints a value with indentation and colors.
-func (m *Model) formatValue(v value.Value, indent int) string {
+/*func (m *Model) formatValue(v value.Value, indent int) string {
 	switch val := v.(type) {
 	case *value.Metadata:
 		return m.formatMetadata(val, indent)
@@ -1197,10 +1188,10 @@ func (m *Model) formatValue(v value.Value, indent int) string {
 	default:
 		return unknownValueStyle.Render(val.String()) + typeAnnotationStyle.Render(fmt.Sprintf(" (%s)", val.Type()))
 	}
-}
+}*/
 
 // formatMap pretty-prints a map value.
-func (m *Model) formatMap(mv *value.Map, indent int) string {
+/*func (m *Model) formatMap(mv *value.Map, indent int) string {
 	if len(mv.Pairs) == 0 {
 		return bracketStyle.Render("{}")
 	}
@@ -1246,10 +1237,10 @@ func (m *Model) formatMap(mv *value.Map, indent int) string {
 
 	lines = append(lines, indentStr+bracketStyle.Render("}"))
 	return strings.Join(lines, "\n")
-}
+}*/
 
 // formatArray pretty-prints an array value.
-func (m *Model) formatArray(av *value.Array, indent int) string {
+/*func (m *Model) formatArray(av *value.Array, indent int) string {
 	if len(av.Elements) == 0 {
 		return bracketStyle.Render("[]")
 	}
@@ -1281,10 +1272,10 @@ func (m *Model) formatArray(av *value.Array, indent int) string {
 
 	lines = append(lines, indentStr+bracketStyle.Render("]"))
 	return strings.Join(lines, "\n")
-}
+}*/
 
 // formatMetadata pretty-prints a metadata value.
-func (m *Model) formatMetadata(mv *value.Metadata, indent int) string {
+/*func (m *Model) formatMetadata(mv *value.Metadata, indent int) string {
 	indentStr := strings.Repeat("  ", indent)
 	innerIndent := strings.Repeat("  ", indent+1)
 
@@ -1318,10 +1309,10 @@ func (m *Model) formatMetadata(mv *value.Metadata, indent int) string {
 
 	lines = append(lines, indentStr+bracketStyle.Render("}"))
 	return strings.Join(lines, "\n")
-}
+}*/
 
 // formatValueInline formats a value for inline display (no newlines).
-func (m *Model) formatValueInline(v value.Value) string {
+/*func (m *Model) formatValueInline(v value.Value) string {
 	switch val := v.(type) {
 	case *value.String:
 		return stringValueStyle.Render(val.String())
@@ -1356,10 +1347,10 @@ func (m *Model) formatValueInline(v value.Value) string {
 	default:
 		return unknownValueStyle.Render(v.String())
 	}
-}
+}*/
 
 // hasNestedStructures checks if an array contains maps, arrays, or metadata.
-func (m *Model) hasNestedStructures(av *value.Array) bool {
+/*func (m *Model) hasNestedStructures(av *value.Array) bool {
 	for _, e := range av.Elements {
 		switch e.(type) {
 		case *value.Map, *value.Array, *value.Metadata:
@@ -1367,10 +1358,10 @@ func (m *Model) hasNestedStructures(av *value.Array) bool {
 		}
 	}
 	return false
-}
+}*/
 
 // RunTUI starts the TUI REPL.
-func RunTUI(v *vm.VirtualMachine, disasm bool) error {
+func RunTUI(v vm.VirtualMachine, disasm bool) error {
 	m := NewTUI(v, disasm)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()

@@ -1,41 +1,39 @@
 package value
 
-// Boolean represents a boolean value.
-type Boolean struct {
-	Value bool
+// BooleanValue wraps bool. Size = 1 byte.
+// The view slice points into the alloc buffer — no data is owned.
+type BooleanValue struct {
+	view []byte
 }
 
-var _ Value = (*Boolean)(nil)
-
-// True and False are singleton boolean values.
-var (
-	True  = &Boolean{Value: true}
-	False = &Boolean{Value: false}
-)
-
-func NewBoolean(b bool) *Boolean {
-	if b {
-		return True
+func NewBoolean(view []byte) *BooleanValue {
+	return &BooleanValue{
+		view: view,
 	}
-	return False
 }
 
-func (b *Boolean) Type() string { return TypeBool }
+func (v *BooleanValue) Type() string {
+	return "boolean"
+}
 
-func (b *Boolean) String() string {
-	if b.Value {
+func (v *BooleanValue) String() string {
+	if v.Data() {
 		return "true"
 	}
+
 	return "false"
 }
 
-func (b *Boolean) Boolean() bool {
-	return b.Value
+func (v *BooleanValue) Size() byte {
+	return 1
 }
 
-func (b *Boolean) Equal(other Value) bool {
-	if o, ok := other.(*Boolean); ok {
-		return b.Value == o.Value
-	}
-	return false
+func (v *BooleanValue) Data() bool {
+	return v.view[0] != 0
 }
+
+func (v *BooleanValue) View() []byte {
+	return v.view
+}
+
+var _ Allocable = (*BooleanValue)(nil)

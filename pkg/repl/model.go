@@ -10,7 +10,7 @@ import (
 // Model is the Bubble Tea model for the TUI REPL.
 type Model struct {
 	// VM and execution
-	vm *vm.VirtualMachine
+	vm vm.VirtualMachine
 
 	// Input state
 	textInput   textinput.Model
@@ -25,9 +25,9 @@ type Model struct {
 	commandIndex int // Next command index [N]
 
 	// Output
-	output        []OutputLine
-	scrollOffset  int
-	showResults   bool // When true, show expression results (like readdir output)
+	output       []OutputLine
+	scrollOffset int
+	showResults  bool // When true, show expression results (like readdir output)
 
 	// Bytecode disasm
 	lastBytecode string

@@ -50,7 +50,7 @@ tasks:
     run:
         desc: Run the agent with the test configuration
         cmds:
-        - ${BUILD_PATH} {{.CLI_ARGS}}
+        - ${BUILD_PATH} --disasm {{.CLI_ARGS}}
         ignore_error: true
 
     test:

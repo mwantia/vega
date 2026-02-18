@@ -1,281 +1,488 @@
-// Package lexer provides tokenization for the Vega language.
 package lexer
 
 import (
-	"unicode"
+	"fmt"
+	"io"
 	"unicode/utf8"
-
-	"github.com/mwantia/vega/errors"
-	"github.com/mwantia/vega/pkg/token"
 )
 
-// Lexer tokenizes Vega source code.
 type Lexer struct {
-	input        string
-	position     int  // current position in input (points to current char)
-	readPosition int  // current reading position in input (after current char)
-	ch           rune // current character under examination
-	line         int  // current line number (1-indexed)
-	column       int  // current column number (1-indexed)
-	errors       errors.ErrorList
+	text     string
+	position int
+	index    int
+	current  rune
+	line     int
+	column   int
 }
 
-// New creates a new Lexer for the given input.
-func New(input string) *Lexer {
-	l := &Lexer{
-		input:  input,
-		line:   1,
-		column: 0,
+func NewLexer(s string) (*Lexer, error) {
+	lexer := &Lexer{
+		text:    s,
+		line:    1,
+		current: 0,
 	}
-	l.readChar()
-	return l
+	if lexer.ReadChar() {
+		return lexer, nil
+	}
+	return nil, io.EOF
 }
 
-// Errors returns any lexing errors encountered.
-func (l *Lexer) Errors() errors.ErrorList {
-	return l.errors
+func (l *Lexer) Tokenize() (TokenBuffer, error) {
+	var tokens []Token
+
+	for {
+		token, err := l.Next()
+		if err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, token)
+		if token.Type == EOF {
+			break
+		}
+	}
+
+	buffer := &lexerTokenBuffer{
+		tokens:   tokens,
+		position: 0,
+	}
+	if len(tokens) > 0 {
+		buffer.current = tokens[0]
+		buffer.position = 1
+	}
+	if len(tokens) > 1 {
+		buffer.peek = tokens[1]
+		buffer.position = 2
+	}
+
+	return buffer, nil
 }
 
-// readChar advances the lexer by one character.
-func (l *Lexer) readChar() {
-	if l.readPosition >= len(l.input) {
-		l.ch = 0 // EOF
-		l.position = l.readPosition // Update position even at EOF for correct slicing
+func (l *Lexer) ReadChar() bool {
+	if l.index >= len(l.text) {
+		l.current = 0 // EOF
+		l.position = l.index
+		return false
 	} else {
-		r, width := utf8.DecodeRuneInString(l.input[l.readPosition:])
-		l.ch = r
-		l.position = l.readPosition
-		l.readPosition += width
+		current, width := utf8.DecodeRuneInString(l.text[l.index:])
+		l.current = current
+		l.position = l.index
+		l.index += width
 	}
 	l.column++
-	if l.ch == '\n' {
+	if l.current == '\n' {
 		l.line++
 		l.column = 0
 	}
+	return true
 }
 
-// peekChar returns the next character without advancing.
-func (l *Lexer) peekChar() rune {
-	if l.readPosition >= len(l.input) {
-		return 0
+func (l *Lexer) PeekChar() rune {
+	if l.index >= len(l.text) {
+		return 0 // EOF
 	}
-	r, _ := utf8.DecodeRuneInString(l.input[l.readPosition:])
-	return r
+	peek, _ := utf8.DecodeRuneInString(l.text[l.index:])
+	return peek
 }
 
-// currentPos returns the current position.
-func (l *Lexer) currentPos() token.Position {
-	return token.Position{
+func (l *Lexer) Position() TokenPosition {
+	return TokenPosition{
 		Line:   l.line,
 		Column: l.column,
 		Offset: l.position,
 	}
 }
 
-// NextToken returns the next token from the input.
-func (l *Lexer) NextToken() token.Token {
-	var tok token.Token
+func (l *Lexer) Next() (Token, error) {
+	var token Token
 
-	l.skipWhitespaceAndComments()
+	l.SkipWhitespaceAndComments()
 
-	pos := l.currentPos()
-
-	switch l.ch {
+	pos := l.Position()
+	switch l.current {
 	case '=':
-		if l.peekChar() == '=' {
-			l.readChar()
-			tok = token.Token{Type: token.EQ, Literal: "==", Pos: pos}
+		if l.PeekChar() == '=' {
+			l.ReadChar()
+			token = Token{
+				Type:     EQUAL,
+				Literal:  "==",
+				Position: pos,
+			}
 		} else {
-			tok = token.Token{Type: token.ASSIGN, Literal: "=", Pos: pos}
+			token = Token{
+				Type:     ASSIGN,
+				Literal:  "=",
+				Position: pos,
+			}
 		}
 	case '+':
-		tok = token.Token{Type: token.PLUS, Literal: "+", Pos: pos}
+		token = Token{
+			Type:     PLUS,
+			Literal:  "+",
+			Position: pos,
+		}
 	case '-':
-		tok = token.Token{Type: token.MINUS, Literal: "-", Pos: pos}
+		token = Token{
+			Type:     MINUS,
+			Literal:  "-",
+			Position: pos,
+		}
 	case '*':
-		tok = token.Token{Type: token.ASTERISK, Literal: "*", Pos: pos}
-	case '/':
-		tok = token.Token{Type: token.SLASH, Literal: "/", Pos: pos}
-	case '%':
-		tok = token.Token{Type: token.PERCENT, Literal: "%", Pos: pos}
-	case '!':
-		if l.peekChar() == '=' {
-			l.readChar()
-			tok = token.Token{Type: token.NOT_EQ, Literal: "!=", Pos: pos}
-		} else {
-			tok = token.Token{Type: token.BANG, Literal: "!", Pos: pos}
-		}
-	case '<':
-		if l.peekChar() == '=' {
-			l.readChar()
-			tok = token.Token{Type: token.LTE, Literal: "<=", Pos: pos}
-		} else {
-			tok = token.Token{Type: token.LT, Literal: "<", Pos: pos}
-		}
-	case '>':
-		if l.peekChar() == '=' {
-			l.readChar()
-			tok = token.Token{Type: token.GTE, Literal: ">=", Pos: pos}
-		} else {
-			tok = token.Token{Type: token.GT, Literal: ">", Pos: pos}
-		}
-	case '&':
-		if l.peekChar() == '&' {
-			l.readChar()
-			tok = token.Token{Type: token.AND, Literal: "&&", Pos: pos}
-		} else {
-			l.addError("unexpected character '&', expected '&&'")
-			tok = token.Token{Type: token.ILLEGAL, Literal: string(l.ch), Pos: pos}
+		token = Token{
+			Type:     ASTERISK,
+			Literal:  "*",
+			Position: pos,
 		}
 	case '|':
-		if l.peekChar() == '|' {
-			l.readChar()
-			tok = token.Token{Type: token.OR, Literal: "||", Pos: pos}
+		token = Token{
+			Type:     PIPE,
+			Literal:  "|",
+			Position: pos,
+		}
+	case '/':
+		token = Token{
+			Type:     SLASH,
+			Literal:  "/",
+			Position: pos,
+		}
+	case '%':
+		token = Token{
+			Type:     PERCENT,
+			Literal:  "%",
+			Position: pos,
+		}
+	case '!':
+		if l.PeekChar() == '=' {
+			l.ReadChar()
+			token = Token{
+				Type:     NOT_EQUAL,
+				Literal:  "!=",
+				Position: pos,
+			}
 		} else {
-			tok = token.Token{Type: token.PIPE, Literal: "|", Pos: pos}
+			token = Token{
+				Type:     BANG,
+				Literal:  "!",
+				Position: pos,
+			}
+		}
+	case '<':
+		if l.PeekChar() == '=' {
+			l.ReadChar()
+			token = Token{
+				Type:     LTE,
+				Literal:  "<=",
+				Position: pos,
+			}
+		} else {
+			token = Token{
+				Type:     LT,
+				Literal:  "<",
+				Position: pos,
+			}
+		}
+	case '>':
+		if l.PeekChar() == '=' {
+			l.ReadChar()
+			token = Token{
+				Type:     GTE,
+				Literal:  ">=",
+				Position: pos,
+			}
+		} else {
+			token = Token{
+				Type:     GT,
+				Literal:  ">",
+				Position: pos,
+			}
+		}
+	case '&':
+		if l.PeekChar() == '&' {
+			l.ReadChar()
+			token = Token{
+				Type:     AND,
+				Literal:  "&&",
+				Position: pos,
+			}
+		} else {
+			return token, fmt.Errorf("unexpected character '&', expected '&&'")
 		}
 	case ',':
-		tok = token.Token{Type: token.COMMA, Literal: ",", Pos: pos}
+		token = Token{
+			Type:     COMMA,
+			Literal:  ",",
+			Position: pos,
+		}
 	case ':':
-		tok = token.Token{Type: token.COLON, Literal: ":", Pos: pos}
+		token = Token{
+			Type:     COLON,
+			Literal:  ":",
+			Position: pos,
+		}
 	case '.':
-		tok = token.Token{Type: token.DOT, Literal: ".", Pos: pos}
+		token = Token{
+			Type:     DOT,
+			Literal:  ".",
+			Position: pos,
+		}
 	case '(':
-		tok = token.Token{Type: token.LPAREN, Literal: "(", Pos: pos}
+		token = Token{
+			Type:     LPAREN,
+			Literal:  "(",
+			Position: pos,
+		}
 	case ')':
-		tok = token.Token{Type: token.RPAREN, Literal: ")", Pos: pos}
+		token = Token{
+			Type:     RPAREN,
+			Literal:  ")",
+			Position: pos,
+		}
 	case '[':
-		tok = token.Token{Type: token.LBRACKET, Literal: "[", Pos: pos}
+		token = Token{
+			Type:     LBRACKET,
+			Literal:  "[",
+			Position: pos,
+		}
 	case ']':
-		tok = token.Token{Type: token.RBRACKET, Literal: "]", Pos: pos}
+		token = Token{
+			Type:     RBRACKET,
+			Literal:  "]",
+			Position: pos,
+		}
 	case '{':
-		tok = token.Token{Type: token.LBRACE, Literal: "{", Pos: pos}
+		token = Token{
+			Type:     LBRACE,
+			Literal:  "{",
+			Position: pos,
+		}
 	case '}':
-		tok = token.Token{Type: token.RBRACE, Literal: "}", Pos: pos}
+		token = Token{
+			Type:     RBRACE,
+			Literal:  "}",
+			Position: pos,
+		}
 	case ';':
-		tok = token.Token{Type: token.SEMICOLON, Literal: ";", Pos: pos}
+		token = Token{
+			Type:     SEMICOLON,
+			Literal:  ";",
+			Position: pos,
+		}
 	case '\n':
-		tok = token.Token{Type: token.NEWLINE, Literal: "\n", Pos: pos}
+		token = Token{
+			Type:     NEWLINE,
+			Literal:  "\n",
+			Position: pos,
+		}
+	case '\'':
+		return l.readCharToken(pos)
 	case '"':
-		return l.readString(pos)
+		return l.ReadStringToken(pos), nil
 	case 0:
-		tok = token.Token{Type: token.EOF, Literal: "", Pos: pos}
+		token = Token{
+			Type:     EOF,
+			Literal:  "",
+			Position: pos,
+		}
 	default:
-		if isLetter(l.ch) {
-			ident := l.readIdentifier()
-			tokType := token.LookupIdent(ident)
-			return token.Token{Type: tokType, Literal: ident, Pos: pos}
-		} else if isDigit(l.ch) {
-			return l.readNumber(pos)
+		if IsLetter(l.current) {
+			ident := l.ReadIdentifier()
+			tokType := LookupIdent(ident)
+			return Token{
+				Type:     tokType,
+				Literal:  ident,
+				Position: pos,
+			}, nil
+		} else if IsDigit(l.current) {
+			return l.readNumberToken(pos), nil
 		} else {
-			l.addError("unexpected character: " + string(l.ch))
-			tok = token.Token{Type: token.ILLEGAL, Literal: string(l.ch), Pos: pos}
+			return token, fmt.Errorf("unexpected character: %v", string(l.current))
 		}
 	}
 
-	l.readChar()
-	return tok
+	l.ReadChar()
+	return token, nil
 }
 
-// Tokenize returns all tokens from the input.
-func (l *Lexer) Tokenize() ([]token.Token, error) {
-	var tokens []token.Token
-
-	for {
-		tok := l.NextToken()
-		tokens = append(tokens, tok)
-		if tok.Type == token.EOF {
-			break
-		}
-	}
-
-	if l.errors.HasErrors() {
-		return tokens, l.errors
-	}
-	return tokens, nil
-}
-
-// skipWhitespaceAndComments skips whitespace (except newlines) and comments.
-func (l *Lexer) skipWhitespaceAndComments() {
+func (l *Lexer) SkipWhitespaceAndComments() bool {
 	for {
 		// Skip spaces and tabs
-		for l.ch == ' ' || l.ch == '\t' || l.ch == '\r' {
-			l.readChar()
+		for l.current == ' ' || l.current == '\t' || l.current == '\r' {
+			if !l.ReadChar() {
+				return false
+			}
 		}
 
 		// Skip comments
-		if l.ch == '#' {
-			l.skipComment()
+		if l.current == '#' {
+			for l.current != '\n' && l.current != 0 {
+				if !l.ReadChar() {
+					return false
+				}
+			}
 			continue
 		}
 
 		break
 	}
+	return true
 }
 
-// skipComment skips a comment until end of line.
-func (l *Lexer) skipComment() {
-	for l.ch != '\n' && l.ch != 0 {
-		l.readChar()
+func (l *Lexer) ReadIdentifier() string {
+	pos := l.position
+	for IsLetter(l.current) || IsDigit(l.current) || l.current == '_' {
+		l.ReadChar()
 	}
+	return l.text[pos:l.position]
 }
 
-// readIdentifier reads an identifier.
-func (l *Lexer) readIdentifier() string {
-	position := l.position
-	for isLetter(l.ch) || isDigit(l.ch) || l.ch == '_' {
-		l.readChar()
-	}
-	return l.input[position:l.position]
-}
-
-// readNumber reads an integer or float literal.
-func (l *Lexer) readNumber(pos token.Position) token.Token {
+// readNumberToken reads a numeric literal with optional type suffix.
+// Integer suffixes: s (short/int16), l (long/int64), default is int (int32).
+// Decimal suffixes: f (float/float32), default is decimal (float64).
+func (l *Lexer) readNumberToken(pos TokenPosition) Token {
 	startPos := l.position
-	isFloat := false
+	isDecimal := false
 
-	for isDigit(l.ch) {
-		l.readChar()
-	}
-
-	// Check for decimal point
-	if l.ch == '.' && isDigit(l.peekChar()) {
-		isFloat = true
-		l.readChar() // consume '.'
-		for isDigit(l.ch) {
-			l.readChar()
+	// Check for hex literal: 0x or 0X
+	if l.current == '0' && (l.PeekChar() == 'x' || l.PeekChar() == 'X') {
+		l.ReadChar() // consume '0'
+		l.ReadChar() // consume 'x'/'X'
+		hexStart := l.position
+		for IsHexDigit(l.current) {
+			l.ReadChar()
+		}
+		hexLiteral := l.text[hexStart:l.position]
+		return Token{
+			Type:     BYTE,
+			Literal:  "0x" + hexLiteral,
+			Position: pos,
 		}
 	}
 
-	literal := l.input[startPos:l.position]
-	if isFloat {
-		return token.Token{Type: token.FLOAT, Literal: literal, Pos: pos}
+	for IsDigit(l.current) {
+		l.ReadChar()
 	}
-	return token.Token{Type: token.INT, Literal: literal, Pos: pos}
+
+	// Check for decimal point
+	if l.current == '.' && IsDigit(l.PeekChar()) {
+		isDecimal = true
+		l.ReadChar() // consume '.'
+		for IsDigit(l.current) {
+			l.ReadChar()
+		}
+	}
+
+	literal := l.text[startPos:l.position]
+
+	// Check for type suffix
+	if isDecimal {
+		if l.current == 'f' {
+			l.ReadChar() // consume suffix
+			return Token{
+				Type:     FLOAT,
+				Literal:  literal,
+				Position: pos,
+			}
+		}
+		return Token{
+			Type:     DECIMAL,
+			Literal:  literal,
+			Position: pos,
+		}
+	}
+
+	switch l.current {
+	case 'b':
+		l.ReadChar() // consume suffix
+		return Token{
+			Type:     BYTE,
+			Literal:  literal,
+			Position: pos,
+		}
+	case 's':
+		l.ReadChar() // consume suffix
+		return Token{
+			Type:     SHORT,
+			Literal:  literal,
+			Position: pos,
+		}
+	case 'l':
+		l.ReadChar() // consume suffix
+		return Token{
+			Type:     LONG,
+			Literal:  literal,
+			Position: pos,
+		}
+	default:
+		return Token{
+			Type:     INTEGER,
+			Literal:  literal,
+			Position: pos,
+		}
+	}
 }
 
-// readString reads a string literal, handling escape sequences and interpolation.
-func (l *Lexer) readString(pos token.Position) token.Token {
-	l.readChar() // consume opening quote
+func (l *Lexer) readCharToken(pos TokenPosition) (Token, error) {
+	l.ReadChar() // consume opening '\''
+
+	var ch rune
+	if l.current == '\\' {
+		l.ReadChar() // consume '\\'
+		switch l.current {
+		case 'n':
+			ch = '\n'
+		case 't':
+			ch = '\t'
+		case 'r':
+			ch = '\r'
+		case '\\':
+			ch = '\\'
+		case '\'':
+			ch = '\''
+		default:
+			return Token{}, fmt.Errorf("unknown char escape: \\%c", l.current)
+		}
+	} else if l.current == '\'' || l.current == 0 {
+		return Token{}, fmt.Errorf("empty char literal")
+	} else {
+		ch = l.current
+	}
+
+	l.ReadChar() // advance past the character
+
+	if l.current != '\'' {
+		return Token{}, fmt.Errorf("unterminated char literal, expected closing '")
+	}
+	l.ReadChar() // consume closing '\''
+
+	return Token{
+		Type:     CHAR,
+		Literal:  string(ch),
+		Position: pos,
+	}, nil
+}
+
+func (l *Lexer) ReadStringToken(pos TokenPosition) Token {
+	l.ReadChar()
 
 	var result []rune
 	hasInterpolation := false
 
 	for {
-		if l.ch == 0 {
-			l.addError("unclosed string literal")
-			return token.Token{Type: token.ILLEGAL, Literal: string(result), Pos: pos}
+		if l.current == 0 {
+			return Token{
+				Type:     ILLEGAL,
+				Literal:  string(result),
+				Position: pos,
+			}
 		}
 
-		if l.ch == '"' {
-			l.readChar() // consume closing quote
+		if l.current == '"' {
+			l.ReadChar()
 			break
 		}
 
-		if l.ch == '\\' {
-			// Escape sequence
-			l.readChar()
-			switch l.ch {
+		if l.current == '\\' {
+			l.ReadChar()
+			switch l.current {
 			case 'n':
 				result = append(result, '\n')
 			case 't':
@@ -289,40 +496,31 @@ func (l *Lexer) readString(pos token.Position) token.Token {
 			case '$':
 				result = append(result, '$')
 			default:
-				l.addError("invalid escape sequence: \\" + string(l.ch))
-				result = append(result, l.ch)
+				result = append(result, l.current)
 			}
-			l.readChar()
+			l.ReadChar()
 			continue
 		}
 
-		if l.ch == '$' && l.peekChar() == '{' {
+		if l.current == '$' && l.PeekChar() == '{' {
 			hasInterpolation = true
 		}
 
-		result = append(result, l.ch)
-		l.readChar()
+		result = append(result, l.current)
+		l.ReadChar()
 	}
 
-	// If there's interpolation, use INTERP_START to signal it
 	if hasInterpolation {
-		return token.Token{Type: token.INTERP_START, Literal: string(result), Pos: pos}
+		return Token{
+			Type:     INTERP_START,
+			Literal:  string(result),
+			Position: pos,
+		}
 	}
 
-	return token.Token{Type: token.STRING, Literal: string(result), Pos: pos}
-}
-
-// addError adds a lexer error.
-func (l *Lexer) addError(message string) {
-	l.errors.Add(errors.NewSyntaxError(message, l.line, l.column))
-}
-
-// isLetter returns true if the rune is a letter or underscore.
-func isLetter(ch rune) bool {
-	return unicode.IsLetter(ch) || ch == '_'
-}
-
-// isDigit returns true if the rune is a digit.
-func isDigit(ch rune) bool {
-	return unicode.IsDigit(ch)
+	return Token{
+		Type:     STRING,
+		Literal:  string(result),
+		Position: pos,
+	}
 }

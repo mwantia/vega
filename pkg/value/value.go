@@ -1,89 +1,41 @@
-// Package value defines the runtime value types for Vega.
 package value
 
-// Type constants for value types.
-const (
-	TypeType     = "type"
-	TypeString   = "string"
-	TypeShort    = "short"
-	TypeInt      = "integer"
-	TypeLong     = "long"
-	TypeFloat    = "float"
-	TypeBool     = "boolean"
-	TypeNil      = "nil"
-	TypeArray    = "array"
-	TypeMap      = "map"
-	TypeStream   = "stream"
-	TypeMetadata = "metadata"
-	TypeTime     = "time"
-)
-
-// Value represents a runtime value in Vega.
+// Value represents a low-level runtime value.
 type Value interface {
-	// Type returns the type name of this value.
+	// Type returns the type name for this value.
 	Type() string
 
-	// String returns a string representation of this value.
+	// String returns a presentable string representation of this value.
 	String() string
-
-	// Boolean returns the truthy/falsy evaluation of this value.
-	Boolean() bool
-
-	// Equal returns true if this value equals another value.
-	Equal(other Value) bool
 }
 
-// Methodable values support extended method calls
-type Methodable interface {
-	Value
-	// Method calls an extended method and returns the result.
-	Method(name string, args []Value) (Value, error)
+// --- Slice value ---
+
+// StringSlice holds a reference to string data in static VM memory (constants table).
+// Implements Value only for now; Slice interface will be added when indexing/iteration is needed.
+type StringSlice struct {
+	data string
 }
 
-// Memberable is
-type Memberable interface {
-	Value
-	// GetMember
-	GetMember(name string) (Value, error)
-	// SetMember
-	SetMember(name string, val Value) (bool, error)
+func NewString(v string) *StringSlice {
+	return &StringSlice{data: v}
 }
 
-// Comparable values can be compared with < > <= >=
-type Comparable interface {
-	Value
-	Compare(other Value) (int, bool)
-}
+func (v *StringSlice) Type() string   { return "string" }
+func (v *StringSlice) String() string { return v.data }
+func (v *StringSlice) Data() string   { return v.data }
 
-// Numeric values support arithmetic operations
-type Numeric interface {
-	Value
-	Add(other Value) (Value, error)
-	Sub(other Value) (Value, error)
-	Mul(other Value) (Value, error)
-	Div(other Value) (Value, error)
-	Mod(other Value) (Value, error)
-	Neg() (Value, error)
-}
+var _ Value = (*StringSlice)(nil)
 
-// Indexable values can be accessed with []
-type Indexable interface {
-	Value
-	Index(key Value) (Value, error)
-	SetIndex(key Value, val Value) error
-}
+// --- Nil ---
 
-// Iterable values can be used in for loops
-type Iterable interface {
-	Value
-	Iterator() Iterator
-}
+// NilValue is a singleton sentinel. Not allocable, not a slice.
+type NilValue struct{}
 
-// Iterator allows iterating over iterable values.
-type Iterator interface {
-	// Next advances the iterator and returns true if there's another value.
-	Next() bool
+func (v *NilValue) Type() string   { return "nil" }
+func (v *NilValue) String() string { return "nil" }
 
-	// Value returns the current value.
-	Value() Value
-}
+var _ Value = (*NilValue)(nil)
+
+// Nil is the package-level nil singleton.
+var Nil = &NilValue{}

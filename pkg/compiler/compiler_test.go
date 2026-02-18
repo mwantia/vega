@@ -1,483 +1,667 @@
-package compiler
+package compiler_test
 
 import (
+	"context"
+	"strings"
 	"testing"
+	"time"
 
+	_ "github.com/mwantia/vfs/mount/service/ephemeral"
+
+	"github.com/mwantia/vega/pkg/compiler"
 	"github.com/mwantia/vega/pkg/lexer"
 	"github.com/mwantia/vega/pkg/parser"
 	"github.com/mwantia/vega/pkg/value"
+	"github.com/mwantia/vega/pkg/vm"
 )
 
-func compile(t *testing.T, input string) *Bytecode {
-	t.Helper()
+type TestCompilerCase struct {
+	Source string
+	Error  *TestCompilerError
+}
 
-	l := lexer.New(input)
-	tokens, err := l.Tokenize()
+type TestCompilerError struct {
+	Phase   string
+	Message string
+	Code    int
+}
+
+type TestCompilerCaseFactory func() *TestCompilerCase
+
+var CaseFactories = map[string]TestCompilerCaseFactory{
+	// Bare expression statements should now produce parse errors
+	"bare-literal-short": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				42s
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "parse",
+				Message: "bare expression statements are not allowed",
+			},
+		}
+	},
+	"bare-literal-integer": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				68
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "parse",
+				Message: "bare expression statements are not allowed",
+			},
+		}
+	},
+	"bare-identifier": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42
+				x
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "parse",
+				Message: "bare expression statements are not allowed",
+			},
+		}
+	},
+
+	// Assignment tests (byte-to-byte load/store)
+	"assign-short": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42s
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"assign-integer": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 68
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"assign-long": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 92l
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"assign-float": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 48.2f
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"assign-decimal": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 23.4
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"assign-byte": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42b
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"assign-char": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 'A'
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"assign-bool": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = true
+				y = false
+			}
+			`,
+			Error: nil,
+		}
+	},
+
+	// Byte-to-byte load/store: assign then re-assign from variable
+	"assign-load-store": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42
+				y = x
+			}
+			`,
+			Error: nil,
+		}
+	},
+
+	"free-and-reuse": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42
+				free(x)
+				y = 100l
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"overflow-alloc": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 4 {
+				x = 42l
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "runtime",
+				Message: "out of memory",
+			},
+		}
+	},
+	"use-after-free": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42
+				free(x)
+				y = x
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "compile",
+				Message: "undefined variable",
+			},
+		}
+	},
+
+	"typed-assign-int": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x: int = 42
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"typed-assign-union": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				y: int|bool = 15
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"typed-assign-union-reassign": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				y: int|bool = 15
+				y = true
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"typed-assign-mismatch": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				y: int = true
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "runtime",
+				Message: "type mismatch",
+			},
+		}
+	},
+	"typed-assign-union-mismatch": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				y: int|bool = 15
+				y = 3.14f
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "runtime",
+				Message: "type mismatch",
+			},
+		}
+	},
+	"typed-assign-unknown-type": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				y: foobar = 15
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "compile",
+				Message: "unknown type name",
+			},
+		}
+	},
+
+	// Pointer alias tests
+	"pointer-alias-int": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42
+				y = *int(0)
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"pointer-alias-short": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42
+				y = *short(0)
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"pointer-alias-long": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 16 {
+				x = 42l
+				y = *long(0)
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"pointer-alias-bool": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = true
+				y = *bool(0)
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"pointer-alias-byte": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42b
+				y = *byte(0)
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"pointer-alias-unknown-type": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				y = *foobar(0)
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "compile",
+				Message: "unknown type name",
+			},
+		}
+	},
+	"pointer-alias-out-of-bounds": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				y = *int(6)
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "runtime",
+				Message: "pointer out of bounds",
+			},
+		}
+	},
+	"pointer-alias-free-error": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42
+				y = *int(0)
+				free(y)
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "runtime",
+				Message: "cannot free pointer alias",
+			},
+		}
+	},
+	"pointer-alias-overlapping": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42
+				y = *short(0)
+				z = *int(0)
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"pointer-alias-reads-same-bytes": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 8 {
+				x = 42
+				y = *int(0)
+				z = y
+			}
+			`,
+			Error: nil,
+		}
+	},
+
+	// Struct tests
+	"struct-define-and-use": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			struct point {
+				x: int
+				y: int
+			}
+			alloc 32 {
+				p = point { x = 10, y = 20 }
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"struct-field-load": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			struct vec2 {
+				x: int
+				y: int
+			}
+			alloc 32 {
+				v = vec2 { x = 3, y = 7 }
+				a = v.x
+				b = v.y
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"struct-multi-field-mixed-types": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			struct record {
+				id: int
+				active: bool
+				score: float
+			}
+			alloc 32 {
+				r = record { id = 42, active = true, score = 3.14f }
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"struct-unknown-type": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 16 {
+				r = unknown_struct { x = 1 }
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "compile",
+				Message: "undefined struct type",
+			},
+		}
+	},
+	"struct-unknown-field": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			struct tiny {
+				x: int
+			}
+			alloc 16 {
+				t = tiny { x = 1, y = 2 }
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "compile",
+				Message: "has no field",
+			},
+		}
+	},
+	"struct-field-unknown-access": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			struct small {
+				a: int
+			}
+			alloc 16 {
+				s = small { a = 5 }
+				x = s.b
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "compile",
+				Message: "has no field",
+			},
+		}
+	},
+	"struct-overflow": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			struct big {
+				a: long
+				b: long
+			}
+			alloc 8 {
+				x = big { a = 1l, b = 2l }
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "runtime",
+				Message: "out of memory",
+			},
+		}
+	},
+	"struct-field-type-in-definition": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			struct bad {
+				x: foobar
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "compile",
+				Message: "unknown type",
+			},
+		}
+	},
+
+	// Tuple tests
+	"tuple-create": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 16 {
+				t = (42, true)
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"tuple-mixed-types": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 32 {
+				t = (10s, 20, 3.14f, true)
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"tuple-field-access": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 16 {
+				t = (42, true)
+				a = t.0
+				b = t.1
+			}
+			`,
+			Error: nil,
+		}
+	},
+	// Uses a stencil registered from Go via RegisterStencil — no struct
+	// declaration in the script source.
+	"registered-stencil-use": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 16 {
+				r = gorecord { id = 1, active = true }
+				a = r.id
+				b = r.active
+			}
+			`,
+			Error: nil,
+		}
+	},
+	"tuple-field-out-of-bounds": func() *TestCompilerCase {
+		return &TestCompilerCase{
+			Source: `
+			alloc 16 {
+				t = (42, true)
+				a = t.5
+			}
+			`,
+			Error: &TestCompilerError{
+				Phase:   "compile",
+				Message: "has no field",
+			},
+		}
+	},
+}
+
+func TestCompilerCases(t *testing.T) {
+	p := parser.NewParser()
+	c := compiler.NewCompiler()
+
+	vm, err := vm.NewEphemeralVM()
 	if err != nil {
-		t.Fatalf("lexer error: %v", err)
+		t.Fatalf("Failed to create ephemeral vm: %v", err)
 	}
 
-	p := parser.New(tokens)
-	program, err := p.Parse()
-	if err != nil {
-		t.Fatalf("parser error: %v", err)
+	// Register a stencil from Go code — available to all tests without a `struct` declaration in the script source.
+	if err := c.RegisterStencil("gorecord", compiler.Field("id", value.TagInteger), compiler.Field("active", value.TagBoolean)); err != nil {
+		t.Fatalf("Failed to register stencil: %v", err)
 	}
 
-	c := New()
-	bytecode, err := c.Compile(program)
-	if err != nil {
-		t.Fatalf("compiler error: %v", err)
-	}
+	for name, factory := range CaseFactories {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
 
-	return bytecode
-}
-
-func TestIntegerLiteral(t *testing.T) {
-	bc := compile(t, "42")
-
-	// Should have one constant: 42
-	if len(bc.Constants) != 1 {
-		t.Fatalf("expected 1 constant, got %d", len(bc.Constants))
-	}
-
-	intVal, ok := bc.Constants[0].(*value.Integer)
-	if !ok {
-		t.Fatalf("expected Integer, got %T", bc.Constants[0])
-	}
-	if intVal.Value != 42 {
-		t.Errorf("expected 42, got %d", intVal.Value)
-	}
-
-	// Should have: LOAD_CONST 0, POP
-	if len(bc.Instructions) != 2 {
-		t.Fatalf("expected 2 instructions, got %d", len(bc.Instructions))
-	}
-
-	if bc.Instructions[0].Op != OpLoadConst {
-		t.Errorf("expected LOAD_CONST, got %s", bc.Instructions[0].Op)
-	}
-	if bc.Instructions[1].Op != OpPop {
-		t.Errorf("expected POP, got %s", bc.Instructions[1].Op)
-	}
-}
-
-func TestStringLiteral(t *testing.T) {
-	bc := compile(t, `"hello"`)
-
-	if len(bc.Constants) != 1 {
-		t.Fatalf("expected 1 constant, got %d", len(bc.Constants))
-	}
-
-	strVal, ok := bc.Constants[0].(*value.String)
-	if !ok {
-		t.Fatalf("expected String, got %T", bc.Constants[0])
-	}
-	if strVal.Value != "hello" {
-		t.Errorf("expected 'hello', got %q", strVal.Value)
-	}
-}
-
-func TestBooleanLiteral(t *testing.T) {
-	bc := compile(t, "true")
-
-	if len(bc.Constants) != 1 {
-		t.Fatalf("expected 1 constant, got %d", len(bc.Constants))
-	}
-
-	boolVal, ok := bc.Constants[0].(*value.Boolean)
-	if !ok {
-		t.Fatalf("expected Boolean, got %T", bc.Constants[0])
-	}
-	if !boolVal.Value {
-		t.Error("expected true")
-	}
-}
-
-func TestAssignment(t *testing.T) {
-	bc := compile(t, "x = 42")
-
-	// Should have: LOAD_CONST 0, STORE_VAR "x"
-	if len(bc.Instructions) != 2 {
-		t.Fatalf("expected 2 instructions, got %d", len(bc.Instructions))
-	}
-
-	if bc.Instructions[0].Op != OpLoadConst {
-		t.Errorf("expected LOAD_CONST, got %s", bc.Instructions[0].Op)
-	}
-	if bc.Instructions[1].Op != OpStoreVar {
-		t.Errorf("expected STORE_VAR, got %s", bc.Instructions[1].Op)
-	}
-	if bc.Instructions[1].Name != "x" {
-		t.Errorf("expected 'x', got %q", bc.Instructions[1].Name)
-	}
-}
-
-func TestBinaryExpression(t *testing.T) {
-	bc := compile(t, "1 + 2")
-
-	// Constants: 1, 2
-	if len(bc.Constants) != 2 {
-		t.Fatalf("expected 2 constants, got %d", len(bc.Constants))
-	}
-
-	// Instructions: LOAD_CONST 0, LOAD_CONST 1, ADD, POP
-	if len(bc.Instructions) != 4 {
-		t.Fatalf("expected 4 instructions, got %d", len(bc.Instructions))
-	}
-
-	if bc.Instructions[2].Op != OpAdd {
-		t.Errorf("expected ADD, got %s", bc.Instructions[2].Op)
-	}
-}
-
-func TestComparisonExpression(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected OpCode
-	}{
-		{"1 == 2", OpEq},
-		{"1 != 2", OpNotEq},
-		{"1 < 2", OpLt},
-		{"1 <= 2", OpLte},
-		{"1 > 2", OpGt},
-		{"1 >= 2", OpGte},
-	}
-
-	for _, tt := range tests {
-		bc := compile(t, tt.input)
-
-		// Find the comparison opcode
-		found := false
-		for _, instr := range bc.Instructions {
-			if instr.Op == tt.expected {
-				found = true
-				break
+			test := factory()
+			lexer, err := lexer.NewLexer(test.Source)
+			if err != nil {
+				t.Fatalf("Failed to create lexer from factory: %v", err)
 			}
-		}
-		if !found {
-			t.Errorf("input %q: expected %s opcode", tt.input, tt.expected)
-		}
-	}
-}
 
-func TestPrefixExpression(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected OpCode
-	}{
-		{"-5", OpNeg},
-		{"!true", OpNot},
-	}
-
-	for _, tt := range tests {
-		bc := compile(t, tt.input)
-
-		found := false
-		for _, instr := range bc.Instructions {
-			if instr.Op == tt.expected {
-				found = true
-				break
+			buffer, err := lexer.Tokenize()
+			if err != nil {
+				t.Fatalf("Failed to create token buffer: %v", err)
 			}
-		}
-		if !found {
-			t.Errorf("input %q: expected %s opcode", tt.input, tt.expected)
-		}
-	}
-}
 
-func TestFunctionCall(t *testing.T) {
-	bc := compile(t, "print(42)")
-
-	// Should have CALL instruction
-	found := false
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpCall {
-			found = true
-			if instr.Name != "print" {
-				t.Errorf("expected function name 'print', got %q", instr.Name)
-			}
-			if instr.Arg != 1 {
-				t.Errorf("expected 1 argument, got %d", instr.Arg)
-			}
-			break
-		}
-	}
-	if !found {
-		t.Error("expected CALL instruction")
-	}
-}
-
-func TestMethodCall(t *testing.T) {
-	bc := compile(t, "vfs.stat(path)")
-
-	// Should have: LOAD_VAR "vfs", LOAD_VAR "path", CALL_METHOD "stat"
-	foundLoadVfs := false
-	foundCallMethod := false
-
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpLoadVar && instr.Name == "vfs" {
-			foundLoadVfs = true
-		}
-		if instr.Op == OpCallMethod && instr.Name == "stat" {
-			foundCallMethod = true
-			if instr.Arg != 1 {
-				t.Errorf("expected 1 argument, got %d", instr.Arg)
-			}
-		}
-	}
-
-	if !foundLoadVfs {
-		t.Error("expected LOAD_VAR 'vfs'")
-	}
-	if !foundCallMethod {
-		t.Error("expected CALL_METHOD 'stat'")
-	}
-}
-
-func TestArrayLiteral(t *testing.T) {
-	bc := compile(t, "[1, 2, 3]")
-
-	// Should have BUILD_ARRAY with count 3
-	found := false
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpBuildArray {
-			found = true
-			if instr.Arg != 3 {
-				t.Errorf("expected 3 elements, got %d", instr.Arg)
-			}
-			break
-		}
-	}
-	if !found {
-		t.Error("expected BUILD_ARRAY instruction")
-	}
-}
-
-func TestMapLiteral(t *testing.T) {
-	bc := compile(t, `{name: "alice", age: 30}`)
-
-	// Should have BUILD_MAP with count 2
-	found := false
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpBuildMap {
-			found = true
-			if instr.Arg != 2 {
-				t.Errorf("expected 2 pairs, got %d", instr.Arg)
-			}
-			break
-		}
-	}
-	if !found {
-		t.Error("expected BUILD_MAP instruction")
-	}
-}
-
-func TestIndexExpression(t *testing.T) {
-	bc := compile(t, "arr[0]")
-
-	found := false
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpIndex {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected INDEX instruction")
-	}
-}
-
-func TestIfStatement(t *testing.T) {
-	bc := compile(t, "if true { x = 1 }")
-
-	// Should have JMP_IF_FALSE
-	found := false
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpJmpIfFalse {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected JMP_IF_FALSE instruction")
-	}
-}
-
-func TestIfElseStatement(t *testing.T) {
-	bc := compile(t, "if true { x = 1 } else { x = 2 }")
-
-	// Should have JMP_IF_FALSE and JMP (for else skip)
-	foundJmpIfFalse := false
-	foundJmp := false
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpJmpIfFalse {
-			foundJmpIfFalse = true
-		}
-		if instr.Op == OpJmp {
-			foundJmp = true
-		}
-	}
-	if !foundJmpIfFalse {
-		t.Error("expected JMP_IF_FALSE instruction")
-	}
-	if !foundJmp {
-		t.Error("expected JMP instruction")
-	}
-}
-
-func TestWhileLoop(t *testing.T) {
-	bc := compile(t, "while x < 10 { x = x + 1 }")
-
-	// Should have JMP_IF_FALSE and JMP (back to start)
-	foundJmpIfFalse := false
-	foundJmp := false
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpJmpIfFalse {
-			foundJmpIfFalse = true
-		}
-		if instr.Op == OpJmp {
-			foundJmp = true
-		}
-	}
-	if !foundJmpIfFalse {
-		t.Error("expected JMP_IF_FALSE instruction")
-	}
-	if !foundJmp {
-		t.Error("expected JMP instruction")
-	}
-}
-
-func TestForLoop(t *testing.T) {
-	bc := compile(t, "for i in [1, 2, 3] { print(i) }")
-
-	// Should have ITER_INIT and ITER_NEXT
-	foundIterInit := false
-	foundIterNext := false
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpIterInit {
-			foundIterInit = true
-		}
-		if instr.Op == OpIterNext {
-			foundIterNext = true
-		}
-	}
-	if !foundIterInit {
-		t.Error("expected ITER_INIT instruction")
-	}
-	if !foundIterNext {
-		t.Error("expected ITER_NEXT instruction")
-	}
-}
-
-func TestAndExpression(t *testing.T) {
-	bc := compile(t, "true && false")
-
-	// Should have DUP, JMP_IF_FALSE (short-circuit)
-	foundDup := false
-	foundJmpIfFalse := false
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpDup {
-			foundDup = true
-		}
-		if instr.Op == OpJmpIfFalse {
-			foundJmpIfFalse = true
-		}
-	}
-	if !foundDup {
-		t.Error("expected DUP instruction for short-circuit")
-	}
-	if !foundJmpIfFalse {
-		t.Error("expected JMP_IF_FALSE instruction for short-circuit")
-	}
-}
-
-func TestOrExpression(t *testing.T) {
-	bc := compile(t, "true || false")
-
-	// Should have DUP, JMP_IF_TRUE (short-circuit)
-	foundDup := false
-	foundJmpIfTrue := false
-	for _, instr := range bc.Instructions {
-		if instr.Op == OpDup {
-			foundDup = true
-		}
-		if instr.Op == OpJmpIfTrue {
-			foundJmpIfTrue = true
-		}
-	}
-	if !foundDup {
-		t.Error("expected DUP instruction for short-circuit")
-	}
-	if !foundJmpIfTrue {
-		t.Error("expected JMP_IF_TRUE instruction for short-circuit")
-	}
-}
-
-func TestFunctionDefinition(t *testing.T) {
-	bc := compile(t, "fn add(a, b) { return a + b }")
-
-	// The function should be stored as a constant
-	foundFunc := false
-	for _, c := range bc.Constants {
-		if _, ok := c.(*Function); ok {
-			foundFunc = true
-			break
-		}
-	}
-	if !foundFunc {
-		t.Error("expected function in constants")
-	}
-}
-
-func TestReturnStatement(t *testing.T) {
-	bc := compile(t, "fn foo() { return 42 }")
-
-	// Find the function and check it has RETURN
-	for _, c := range bc.Constants {
-		if fn, ok := c.(*Function); ok {
-			foundReturn := false
-			for _, instr := range fn.Bytecode.Instructions {
-				if instr.Op == OpReturn {
-					foundReturn = true
-					break
+			ast, err := p.MakeProgram(buffer)
+			if test.Error != nil && test.Error.Phase == "parse" {
+				if err == nil {
+					t.Fatalf("Expected parse error containing %q, got nil", test.Error.Message)
+				}
+				if !strings.Contains(err.Error(), test.Error.Message) {
+					t.Fatalf("Parse error = %q, want containing %q", err.Error(), test.Error.Message)
+				}
+				return
+			} else {
+				if err != nil {
+					t.Fatalf("Failed to make program: %v", err)
 				}
 			}
-			if !foundReturn {
-				t.Error("expected RETURN in function bytecode")
+
+			byteCode, err := c.Compile(ast)
+			if test.Error != nil && test.Error.Phase == "compile" {
+				if err == nil {
+					t.Fatalf("Expected compile error containing %q, got nil", test.Error.Message)
+				}
+				if !strings.Contains(err.Error(), test.Error.Message) {
+					t.Fatalf("Compile error = %q, want containing %q", err.Error(), test.Error.Message)
+				}
+				return
+			} else {
+				if err != nil {
+					t.Fatalf("Failed to compile program: %v", err)
+				}
 			}
-		}
-	}
-}
 
-func TestDisassemble(t *testing.T) {
-	bc := compile(t, "x = 1 + 2")
-
-	disasm := bc.Disassemble()
-	if disasm == "" {
-		t.Error("disassemble returned empty string")
+			_, err = vm.Run(ctx, byteCode)
+			if test.Error != nil && test.Error.Phase == "runtime" {
+				if err == nil {
+					t.Fatalf("Expected runtime error containing %q, got nil", test.Error.Message)
+				}
+				if !strings.Contains(err.Error(), test.Error.Message) {
+					t.Fatalf("Runtime error = %q, want containing %q", err.Error(), test.Error.Message)
+				}
+				return
+			} else {
+				if err != nil {
+					t.Fatalf("Failed to run bytecode in virtual machine: %v", err)
+				}
+			}
+		})
 	}
-
-	// Check it contains expected parts
-	if !contains(disasm, "LOAD_CONST") {
-		t.Error("disassembly should contain LOAD_CONST")
-	}
-	if !contains(disasm, "ADD") {
-		t.Error("disassembly should contain ADD")
-	}
-	if !contains(disasm, "STORE_VAR") {
-		t.Error("disassembly should contain STORE_VAR")
-	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
