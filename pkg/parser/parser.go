@@ -54,8 +54,6 @@ func (p *Parser) makeStatement(b lexer.TokenBuffer) (Statement, error) {
 		return p.makeBreakStatement(b)
 	case lexer.CONTINUE:
 		return p.makeContinueStatement(b)
-	case lexer.ALLOC:
-		return p.makeAllocStatement(b)
 	case lexer.FREE:
 		return p.makeFreeStatement(b)
 	case lexer.STRUCT:
@@ -243,6 +241,7 @@ func (p *Parser) makeDeclarationExpression(b lexer.TokenBuffer) (*DeclarationExp
 		Value:       token.Literal,
 		Constraints: make([]Expression, 0),
 	}
+	b.Read() // advance past the parameter name
 
 	if b.MatchAny(true, lexer.COLON) {
 		constraint, err := p.makeExpression(b, LOWEST)
@@ -315,31 +314,6 @@ func (p *Parser) makeContinueStatement(b lexer.TokenBuffer) (*ContinueStatement,
 	}
 	b.Read()
 	b.MatchAny(true, lexer.NEWLINE, lexer.SEMICOLON)
-	return statement, nil
-}
-
-func (p *Parser) makeAllocStatement(b lexer.TokenBuffer) (*AllocStatement, error) {
-	statement := &AllocStatement{
-		Token: b.Current(),
-	}
-	b.Read()
-
-	size, err := p.makeExpression(b, LOWEST)
-	if err != nil {
-		return nil, fmt.Errorf("expected size expression after 'alloc': %v", err)
-	}
-	statement.Size = size
-
-	if !b.MatchAny(false, lexer.LBRACE) {
-		return nil, fmt.Errorf("expected '{' after alloc size, but received '%s'", b.Current().Literal)
-	}
-
-	b.Read()
-	body, err := p.makeBlockStatement(b)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse alloc body: %v", err)
-	}
-	statement.Body = body
 	return statement, nil
 }
 

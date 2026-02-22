@@ -4,14 +4,14 @@ package value
 type TypeTag byte
 
 const (
-	TagShort   TypeTag = 1 // int16, 2 bytes
-	TagInteger TypeTag = 2 // int32, 4 bytes
-	TagLong    TypeTag = 3 // int64, 8 bytes
+	TagShort   TypeTag = 1 // int16,   2 bytes
+	TagInteger TypeTag = 2 // int32,   4 bytes
+	TagLong    TypeTag = 3 // int64,   8 bytes
 	TagFloat   TypeTag = 4 // float32, 4 bytes
 	TagDecimal TypeTag = 5 // float64, 8 bytes
-	TagBoolean TypeTag = 6 // bool, 1 byte
-	TagByte    TypeTag = 7 // uint8, 1 byte
-	TagChar    TypeTag = 8 // rune, 4 bytes
+	TagBoolean TypeTag = 6 // bool,    1 byte
+	TagByte    TypeTag = 7 // uint8,   1 byte
+	TagString  TypeTag = 8 // []byte,  variable length (SizeForTag returns 0)
 )
 
 // TagFor returns the TypeTag for an Allocable value.
@@ -31,8 +31,8 @@ func TagFor(a Allocable) TypeTag {
 		return TagBoolean
 	case *ByteValue:
 		return TagByte
-	case *CharValue:
-		return TagChar
+	case *StringValue:
+		return TagString
 	default:
 		return 0
 	}
@@ -55,8 +55,8 @@ func TagForName(name string) (TypeTag, bool) {
 		return TagBoolean, true
 	case "byte":
 		return TagByte, true
-	case "char":
-		return TagChar, true
+	case "str", "string":
+		return TagString, true
 	default:
 		return 0, false
 	}
@@ -78,8 +78,8 @@ func NameForTag(tag TypeTag) (string, bool) {
 		return "boolean", true
 	case TagByte:
 		return "byte", true
-	case TagChar:
-		return "char", true
+	case TagString:
+		return "string", true
 	default:
 		return "", false
 	}
@@ -113,6 +113,7 @@ func MaxSizeForMask(mask byte) int {
 }
 
 // SizeForTag returns the byte size for the given TypeTag.
+// Returns 0 for variable-length types (TagString).
 func SizeForTag(tag TypeTag) int {
 	switch tag {
 	case TagShort:
@@ -129,8 +130,8 @@ func SizeForTag(tag TypeTag) int {
 		return 1
 	case TagByte:
 		return 1
-	case TagChar:
-		return 4
+	case TagString:
+		return 0
 	default:
 		return 0
 	}

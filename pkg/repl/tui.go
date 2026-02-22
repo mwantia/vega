@@ -4,12 +4,14 @@ package repl
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mwantia/vega/pkg/alloc"
 	"github.com/mwantia/vega/pkg/compiler"
 	"github.com/mwantia/vega/pkg/lexer"
 	"github.com/mwantia/vega/pkg/parser"
@@ -18,6 +20,8 @@ import (
 
 // NewTUI creates a new TUI REPL model.
 func NewTUI(v vm.VirtualMachine, disasm bool) Model {
+	v.StartSession()
+
 	ti := textinput.New()
 	ti.Prompt = "" // Remove default "> " prompt
 	ti.Placeholder = ""
@@ -32,6 +36,7 @@ func NewTUI(v vm.VirtualMachine, disasm bool) Model {
 
 	return Model{
 		vm:           v,
+		compiler:     compiler.NewCompiler(),
 		textInput:    ti,
 		searchInput:  si,
 		history:      make([]HistoryEntry, 0),
@@ -334,9 +339,17 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 
 func (m *Model) handleCommand(line string) (bool, tea.Cmd) {
 	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "/") {
+		return false, nil
+	}
+	parts := strings.Fields(line[1:])
+	if len(parts) == 0 {
+		return false, nil
+	}
+	cmd, args := parts[0], parts[1:]
 
-	switch line {
-	case "quit":
+	switch cmd {
+	case "q", "quit", "exit":
 		m.quitting = true
 		return true, tea.Quit
 
@@ -356,14 +369,50 @@ func (m *Model) handleCommand(line string) (bool, tea.Cmd) {
 	case "vars":
 		m.addOutput("Variable inspection not yet implemented.", OutputInfo, -1)
 		return true, nil
+
+	case "fresh":
+		m.resetSession()
+		return true, nil
+
+	case "load":
+		if len(args) == 0 {
+			m.addOutput("Usage: /load <path>", OutputError, -1)
+		} else {
+			m.loadScript(args[0])
+		}
+		return true, nil
 	}
 
-	return false, nil
+	m.addOutput(fmt.Sprintf("Unknown command: /%s  (type /help for help)", cmd), OutputError, -1)
+	return true, nil
+}
+
+func (m *Model) resetSession() {
+	m.compiler = compiler.NewCompiler()
+	m.vm.ResetSession()
+	m.vm.StartSession()
+	m.bytecodeHistory = nil
+	m.disasmScroll = 0
+	m.addOutput("Session reset.", OutputInfo, -1)
+}
+
+func (m *Model) loadScript(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		m.addOutput(fmt.Sprintf("Error loading '%s': %v", path, err), OutputError, -1)
+		return
+	}
+	m.executeAs("/load "+path, string(data))
 }
 
 func (m *Model) execute(input string) {
-	input = strings.TrimSpace(input)
-	if input == "" {
+	m.executeAs(input, input)
+}
+
+// executeAs compiles and runs source, displaying label as the command line.
+func (m *Model) executeAs(label, source string) {
+	source = strings.TrimSpace(source)
+	if source == "" {
 		return
 	}
 
@@ -373,16 +422,18 @@ func (m *Model) execute(input string) {
 	// Add command to output and remember its index
 	cmdIdx := m.commandIndex
 	cmdOutputIdx := len(m.output)
-	m.addOutput(fmt.Sprintf("[%d] vega $ %s", cmdIdx, input), OutputCommand, cmdIdx)
+	m.addOutput(fmt.Sprintf("[%d] vega $ %s", cmdIdx, label), OutputCommand, cmdIdx)
 
 	// Add to history
 	m.history = append(m.history, HistoryEntry{
 		Index: cmdIdx,
-		Input: input,
+		Input: label,
 		Exec:  time.Now(),
 	})
 	m.commandIndex++
 	m.historyIndex = -1
+
+	input := source
 
 	// Lexer
 	l, _ := lexer.NewLexer(input)
@@ -406,9 +457,8 @@ func (m *Model) execute(input string) {
 		return
 	}
 
-	// Compiler
-	c := compiler.NewCompiler()
-	bytecode, err := c.Compile(program)
+	// Compiler (persistent across commands to preserve stencils and scope)
+	bytecode, err := m.compiler.Compile(program)
 	if err != nil {
 		m.output[cmdOutputIdx].Duration = time.Since(startTime)
 		m.addOutput(fmt.Sprintf("Compile error: %v", err), OutputError, cmdIdx)
@@ -417,8 +467,11 @@ func (m *Model) execute(input string) {
 		return
 	}
 
-	// Store bytecode for disasm
-	m.lastBytecode = bytecode.Disassemble()
+	// Prepend to bytecode history so newest appears at the top
+	m.bytecodeHistory = append([]BytecodeEntry{{
+		Index:    cmdIdx,
+		Bytecode: bytecode.Disassemble(),
+	}}, m.bytecodeHistory...)
 	m.disasmScroll = 0
 
 	// Capture output
@@ -437,6 +490,12 @@ func (m *Model) execute(input string) {
 
 	// Record duration
 	m.output[cmdOutputIdx].Duration = time.Since(startTime)
+
+	// Snapshot allocator state for the hex viewer (always, even on error)
+	if snap := m.vm.Snapshot(); snap != nil {
+		m.allocSnapshot = snap
+		m.hexScroll = 1 << 30 // sentinel: clamp to end in renderHexPane
+	}
 
 	if err != nil {
 		// Check if this was a cancellation (user interrupted via Ctrl+C)
@@ -501,11 +560,13 @@ func (m *Model) addOutput(text string, typ OutputType, histIdx int) {
 
 func (m *Model) printHelp() {
 	m.addOutput("Commands:", OutputInfo, -1)
-	m.addOutput("  help     - Show this help message", OutputInfo, -1)
-	m.addOutput("  quit     - Exit the REPL (also: exit)", OutputInfo, -1)
-	m.addOutput("  history  - Show command history", OutputInfo, -1)
-	m.addOutput("  clear    - Clear the screen", OutputInfo, -1)
-	m.addOutput("  vars     - Show defined variables", OutputInfo, -1)
+	m.addOutput("  /help            - Show this help", OutputInfo, -1)
+	m.addOutput("  /quit  (/q)      - Exit the REPL", OutputInfo, -1)
+	m.addOutput("  /history         - Show command history", OutputInfo, -1)
+	m.addOutput("  /clear           - Clear the screen", OutputInfo, -1)
+	m.addOutput("  /vars            - Show defined variables", OutputInfo, -1)
+	m.addOutput("  /fresh           - Reset the session (clears all variables, types, functions)", OutputInfo, -1)
+	m.addOutput("  /load <path>     - Load and execute a script file into the current session", OutputInfo, -1)
 	m.addOutput("", OutputInfo, -1)
 	m.addOutput("Key bindings:", OutputInfo, -1)
 	m.addOutput("  Ctrl+R   - Search history", OutputInfo, -1)
@@ -676,6 +737,164 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%.1fm", d.Minutes())
 }
 
+// isFreeAt reports whether the byte at offset falls within a free block.
+// freeList must be sorted by offset (as maintained by the Allocator).
+func isFreeAt(freeList []alloc.FreeBlock, offset int) bool {
+	for _, block := range freeList {
+		if block.Offset > offset {
+			break
+		}
+		if offset < block.Offset+block.Size {
+			return true
+		}
+	}
+	return false
+}
+
+// formatBytes formats a byte count as a human-readable string.
+func formatBytes(n int) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%dB", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1fKB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
+	}
+}
+
+func (m Model) renderHexRow(buf []byte, freeList []alloc.FreeBlock, offset, bytesPerRow int) string {
+	var sb strings.Builder
+
+	// Address column
+	sb.WriteString(hexAddrStyle.Render(fmt.Sprintf("%08x  ", offset)))
+
+	// Hex bytes — split into two groups with an extra space in the middle
+	for i := 0; i < bytesPerRow; i++ {
+		if i == bytesPerRow/2 {
+			sb.WriteString(" ")
+		}
+		byteOffset := offset + i
+		if byteOffset >= len(buf) {
+			sb.WriteString("   ")
+			continue
+		}
+		b := buf[byteOffset]
+		free := isFreeAt(freeList, byteOffset)
+		switch {
+		case free:
+			sb.WriteString(hexFreeStyle.Render("·· "))
+		case b == 0:
+			sb.WriteString(hexZeroStyle.Render("00 "))
+		default:
+			sb.WriteString(hexByteStyle.Render(fmt.Sprintf("%02x ", b)))
+		}
+	}
+
+	// ASCII column
+	sb.WriteString(" ")
+	for i := 0; i < bytesPerRow; i++ {
+		byteOffset := offset + i
+		if byteOffset >= len(buf) {
+			sb.WriteString(" ")
+			continue
+		}
+		b := buf[byteOffset]
+		free := isFreeAt(freeList, byteOffset)
+		var ch string
+		if b >= 32 && b < 127 {
+			ch = string(rune(b))
+		} else {
+			ch = "·"
+		}
+		switch {
+		case free:
+			sb.WriteString(hexFreeStyle.Render(ch))
+		case b == 0:
+			sb.WriteString(hexZeroStyle.Render(ch))
+		default:
+			sb.WriteString(hexByteStyle.Render(ch))
+		}
+	}
+
+	return sb.String()
+}
+
+func (m Model) renderHexPane(width, height int) string {
+	var lines []string
+
+	title := hexTitleStyle.Render("  Allocator Buffer")
+	lines = append(lines, padOrTruncate(title, width))
+
+	if m.allocSnapshot == nil {
+		lines = append(lines, hexInfoStyle.Render("  (no snapshot — execute code to see memory)"))
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return strings.Join(lines[:height], "\n")
+	}
+
+	snap := m.allocSnapshot
+	buf := snap.Buffer
+
+	// Compute stats
+	freeBytes := 0
+	for _, block := range snap.FreeList {
+		freeBytes += block.Size
+	}
+	usedBytes := snap.Capacity - freeBytes
+
+	// Find the last non-zero byte to avoid showing megabytes of zeros
+	lastUsed := -1
+	for i := len(buf) - 1; i >= 0; i-- {
+		if buf[i] != 0 {
+			lastUsed = i
+			break
+		}
+	}
+
+	const bytesPerRow = 16
+	totalRows := 0
+	if lastUsed >= 0 {
+		totalRows = lastUsed/bytesPerRow + 1
+	}
+
+	info := fmt.Sprintf("  Cap: %s  Used: %s  Free: %s  Rows: %d",
+		formatBytes(snap.Capacity), formatBytes(usedBytes), formatBytes(freeBytes), totalRows)
+	lines = append(lines, hexInfoStyle.Render(info))
+
+	contentRows := height - len(lines)
+	if contentRows < 1 {
+		for len(lines) < height {
+			lines = append(lines, "")
+		}
+		return strings.Join(lines[:height], "\n")
+	}
+
+	if totalRows == 0 {
+		lines = append(lines, hexInfoStyle.Render("  (allocator empty)"))
+	} else {
+		// Clamp scroll so we never show past the last used row
+		startRow := m.hexScroll
+		if startRow+contentRows > totalRows {
+			startRow = totalRows - contentRows
+		}
+		if startRow < 0 {
+			startRow = 0
+		}
+
+		for row := startRow; row < startRow+contentRows && row < totalRows; row++ {
+			line := m.renderHexRow(buf, snap.FreeList, row*bytesPerRow, bytesPerRow)
+			lines = append(lines, truncateToWidth(line, width))
+		}
+	}
+
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines[:height], "\n")
+}
+
 func (m Model) inputWidth() int {
 	if m.showDisasm {
 		return int(float64(m.width) * 0.65)
@@ -691,7 +910,7 @@ func (m Model) View() string {
 
 	var b strings.Builder
 
-	// Calculate dimensions
+	// Calculate horizontal dimensions
 	mainWidth := m.width
 	disasmWidth := 0
 	if m.showDisasm {
@@ -699,48 +918,64 @@ func (m Model) View() string {
 		mainWidth = m.width - disasmWidth - 1
 	}
 
-	// Reserve height for status bar
-	contentHeight := m.height - 2
-	if contentHeight < 1 {
-		contentHeight = 1
+	// Total content height (reserve 1 line for status bar)
+	contentHeight := m.height - 1
+	if contentHeight < 3 {
+		contentHeight = 3
 	}
 
-	// Render main pane (output + input)
-	mainPane := m.renderMainPane(mainWidth, contentHeight)
-
-	// Render disasm pane if enabled
-	var disasmPane string
-	if m.showDisasm {
-		disasmPane = m.renderDisasmPane(disasmWidth, contentHeight)
+	// Split left pane vertically: 60% workspace, 1 separator, 40% hex viewer
+	workspaceHeight := contentHeight * 6 / 10
+	if workspaceHeight < 2 {
+		workspaceHeight = 2
+	}
+	hexHeight := contentHeight - workspaceHeight - 1 // -1 for the ─ separator row
+	if hexHeight < 1 {
+		hexHeight = 1
+		workspaceHeight = contentHeight - 2
 	}
 
-	// Combine panes horizontally
+	// Render left pane components
+	mainPane := m.renderMainPane(mainWidth, workspaceHeight)
+	hexPane := m.renderHexPane(mainWidth, hexHeight)
+
+	// Build left column: workspace rows + horizontal separator + hex rows
+	leftLines := strings.Split(mainPane, "\n")
+	hexSep := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(strings.Repeat("─", mainWidth))
+	leftLines = append(leftLines, hexSep)
+	leftLines = append(leftLines, strings.Split(hexPane, "\n")...)
+	for len(leftLines) < contentHeight {
+		leftLines = append(leftLines, "")
+	}
+
+	// Vertical separator between left and right panes
+	vert := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("│")
+
 	if m.showDisasm {
-		mainLines := strings.Split(mainPane, "\n")
+		disasmPane := m.renderDisasmPane(disasmWidth, contentHeight)
 		disasmLines := strings.Split(disasmPane, "\n")
-
-		// Pad to same height
-		for len(mainLines) < contentHeight {
-			mainLines = append(mainLines, "")
-		}
 		for len(disasmLines) < contentHeight {
 			disasmLines = append(disasmLines, "")
 		}
-
-		separator := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("│")
-
 		for i := 0; i < contentHeight; i++ {
-			ml := padOrTruncate(mainLines[i], mainWidth)
-			dl := padOrTruncate(disasmLines[i], disasmWidth)
-
-			b.WriteString(ml)
-			b.WriteString(separator)
-			b.WriteString(dl)
+			ll := ""
+			if i < len(leftLines) {
+				ll = leftLines[i]
+			}
+			b.WriteString(padOrTruncate(ll, mainWidth))
+			b.WriteString(vert)
+			b.WriteString(padOrTruncate(disasmLines[i], disasmWidth))
 			b.WriteString("\n")
 		}
 	} else {
-		b.WriteString(mainPane)
-		b.WriteString("\n")
+		for i := 0; i < contentHeight; i++ {
+			ll := ""
+			if i < len(leftLines) {
+				ll = leftLines[i]
+			}
+			b.WriteString(padOrTruncate(ll, mainWidth))
+			b.WriteString("\n")
+		}
 	}
 
 	// Status bar
@@ -851,18 +1086,50 @@ func (m Model) renderDisasmPane(width, height int) string {
 	var lines []string
 
 	// Title
-	title := disasmTitleStyle.Render("Bytecode (Last Exec)")
+	count := len(m.bytecodeHistory)
+	title := disasmTitleStyle.Render(fmt.Sprintf("  Bytecode History (%d)", count))
 	lines = append(lines, padOrTruncate(title, width))
 
-	// Disasm content
-	if m.lastBytecode == "" {
-		lines = append(lines, disasmStyle.Render("(no bytecode)"))
+	if count == 0 {
+		lines = append(lines, disasmStyle.Render("  (no bytecode)"))
 	} else {
-		disasmLines := strings.SplitSeq(m.lastBytecode, "\n")
-		for line := range disasmLines {
-			styled := m.styleBytecode(line)
-			lines = append(lines, truncateToWidth(styled, width))
+		dimSep := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+		for i, entry := range m.bytecodeHistory {
+			// Entry header: "[N] ─────────────────"
+			label := fmt.Sprintf("[%d]", entry.Index)
+			header := indexStyle.Render(label) +
+				dimSep.Render(" "+strings.Repeat("─", width))
+			lines = append(lines, truncateToWidth(header, width))
+
+			// Bytecode lines (skip blanks)
+			if strings.TrimSpace(entry.Bytecode) == "" {
+				lines = append(lines, "  "+typeAnnotationStyle.Render("compile-time definition — no bytecode emitted"))
+			} else {
+				for line := range strings.SplitSeq(entry.Bytecode, "\n") {
+					if line == "" {
+						continue
+					}
+					lines = append(lines, "  "+truncateToWidth(m.styleBytecode(line), width-2))
+				}
+			}
+
+			// Blank line between entries (not after the last one)
+			if i < count-1 {
+				lines = append(lines, "")
+			}
 		}
+	}
+
+	// Apply scroll offset
+	if len(lines) > height {
+		start := m.disasmScroll
+		if start+height > len(lines) {
+			start = len(lines) - height
+		}
+		if start < 0 {
+			start = 0
+		}
+		lines = lines[start : start+height]
 	}
 
 	// Pad to height
@@ -929,7 +1196,7 @@ func (m Model) renderStatusBar() string {
 	} else {
 		hints = append(hints, "[Ctrl+D] Show Disasm")
 	}
-	hints = append(hints, "[?] Help")
+	hints = append(hints, "[/help] Help")
 
 	right := strings.Join(hints, " | ")
 

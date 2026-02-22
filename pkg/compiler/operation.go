@@ -5,8 +5,6 @@ type OperationCode byte
 const (
 	OpStackPOP OperationCode = iota
 
-	OpStackALLOC
-	OpStackFREE
 	OpLoadCONST
 
 	OpVarALLOC // allocate slot in byte buffer (arg: slot ID, extra: type mask)
@@ -20,13 +18,21 @@ const (
 	OpFieldLOAD    // load field from slot (arg: slot ID, offset: field byte offset, extra: type tag)
 
 	OpCallNAT // call a registered native (Go) function (name: function name, arg: argument count)
+	OpCallFN  // call a user-defined (Vega) function (name: function name, arg: argument count)
+	OpReturn  // return from user function (extra: 0=void, 1=has return value)
+	OpLoadArg // push a pending primitive argument onto the expr stack (arg: argument index)
+
+	OpVarLoadRaw     // push stencil slot bytes as a RawValue (arg: slot ID, offset: total size)
+	OpLoadArgStencil // restore a stencil arg from pending args into a new slot (arg: pending index, extra: slot ID, offset: total size)
+
+	OpStrSTORE // pop StringValue, (re)alloc slot if needed, copy bytes in (arg: slot ID)
+
+	OpPtrLOAD // pop offset from expr stack, read tag-typed value from allocator, push result (extra: type tag)
 )
 
 var operationNames = map[OperationCode]string{
-	OpStackPOP:   "STACK_POP",
-	OpStackALLOC: "STACK_ALLOC",
-	OpStackFREE:  "STACK_FREE",
-	OpLoadCONST:  "LOAD_CONST",
+	OpStackPOP:  "STACK_POP",
+	OpLoadCONST: "LOAD_CONST",
 
 	OpVarALLOC: "VAR_ALLOC",
 	OpVarSTORE: "VAR_STORE",
@@ -39,6 +45,15 @@ var operationNames = map[OperationCode]string{
 	OpFieldLOAD:    "FIELD_LOAD",
 
 	OpCallNAT: "CALL_NAT",
+	OpCallFN:  "CALL_FN",
+	OpReturn:  "RETURN",
+	OpLoadArg: "LOAD_ARG",
+
+	OpVarLoadRaw:     "VAR_LOAD_RAW",
+	OpLoadArgStencil: "LOAD_ARG_STENCIL",
+
+	OpStrSTORE: "STR_STORE",
+	OpPtrLOAD:  "PTR_LOAD",
 }
 
 func (op OperationCode) String() string {

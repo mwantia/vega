@@ -78,19 +78,22 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 				}
 			}
 
-			trace, _ := cmd.Flags().GetBool("trace")
+			// trace, _ := cmd.Flags().GetBool("trace")
 
 			vm := vm.NewVM(fs)
+			vm.Stdin(os.Stdin)
+			vm.Stdout(os.Stdout)
+			vm.Stderr(os.Stderr)
 			// defer vm.Shutdown()
 
-			if trace {
-				// vm.EnableTrace()
-			}
+			/*if trace {
+				vm.EnableTrace()
+			}*/
 
 			if bytecode != nil {
 				if disasm {
-					// fmt.Println(bytecode.Disassemble())
-					fmt.Println("--- Execution ---")
+					fmt.Println(bytecode.Disassemble())
+					fmt.Println("=== Execution ===")
 				}
 
 				_, err := vm.Run(ctx, bytecode)

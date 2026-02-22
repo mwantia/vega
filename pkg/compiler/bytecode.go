@@ -19,6 +19,7 @@ type ByteCode struct {
 	Instructions []Instruction
 	Constants    []Constant
 	LoopStack    []LoopStack
+	Functions    map[string]*FunctionDef // user-defined functions compiled from this program
 }
 
 type LoopStack struct {
@@ -43,6 +44,27 @@ func (b *ByteCode) Disassemble() string {
 		sb.WriteString("\n=== Instructions ===\n")
 		for i, n := range b.Instructions {
 			fmt.Fprintf(&sb, "%4d: %s\n", i, n.String())
+		}
+	}
+
+	for name, fn := range b.Functions {
+		fmt.Fprintf(&sb, "\n=== Function: %s ===\n", name)
+		// Print the function body directly — do NOT call fn.ByteCode.Disassemble()
+		// because function bytecodes share the top-level Functions map, which would
+		// cause infinite recursion.
+		if len(fn.ByteCode.Constants) > 0 {
+			sb.WriteString("=== Constants ===\n")
+			for i, c := range fn.ByteCode.Constants {
+				if cname, ok := value.NameForTag(c.Tag); ok {
+					fmt.Fprintf(&sb, "%4d: %s (%s)\n", i, hex.EncodeToString(c.Data), cname)
+				}
+			}
+		}
+		if len(fn.ByteCode.Instructions) > 0 {
+			sb.WriteString("=== Instructions ===\n")
+			for i, n := range fn.ByteCode.Instructions {
+				fmt.Fprintf(&sb, "%4d: %s\n", i, n.String())
+			}
 		}
 	}
 

@@ -121,3 +121,23 @@ func (a *Allocator) FreeSpace() int {
 	}
 	return total
 }
+
+// AllocSnapshot is a point-in-time deep copy of the allocator state.
+type AllocSnapshot struct {
+	Buffer   []byte
+	FreeList []FreeBlock
+	Capacity int
+}
+
+// Snapshot returns a deep copy of the current allocator state.
+func (a *Allocator) Snapshot() AllocSnapshot {
+	buf := make([]byte, len(a.buffer))
+	copy(buf, a.buffer)
+	free := make([]FreeBlock, len(a.freeList))
+	copy(free, a.freeList)
+	return AllocSnapshot{
+		Buffer:   buf,
+		FreeList: free,
+		Capacity: len(a.buffer),
+	}
+}

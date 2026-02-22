@@ -102,4 +102,31 @@ var (
 	durationStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("8")).
 			Italic(true)
+
+	// Hex viewer styles
+	hexTitleStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("56")).
+			Foreground(lipgloss.Color("15")).
+			Bold(true).
+			Padding(0, 1)
+
+	hexInfoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")).
+			Italic(true)
+
+	// hexAddrStyle styles the 8-digit offset at the start of each row.
+	hexAddrStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8"))
+
+	// hexFreeStyle styles bytes that belong to a free (unallocated) block.
+	hexFreeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("238"))
+
+	// hexZeroStyle styles allocated bytes whose value is zero.
+	hexZeroStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("244"))
+
+	// hexByteStyle styles allocated bytes with a non-zero value.
+	hexByteStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("10"))
 )

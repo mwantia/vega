@@ -349,35 +349,6 @@ func (cs *ContinueStatement) String() string {
 
 var _ Statement = (*ContinueStatement)(nil)
 
-type AllocStatement struct {
-	Token lexer.Token
-	Size  Expression
-	Body  *BlockStatement
-}
-
-func (as *AllocStatement) Statement() {
-
-}
-
-func (as *AllocStatement) Literal() string {
-	return as.Token.Literal
-}
-
-func (as *AllocStatement) Position() lexer.TokenPosition {
-	return as.Token.Position
-}
-
-func (as *AllocStatement) String() string {
-	var out strings.Builder
-	out.WriteString("alloc ")
-	out.WriteString(as.Size.String())
-	out.WriteString(" ")
-	out.WriteString(as.Body.String())
-	return out.String()
-}
-
-var _ Statement = (*AllocStatement)(nil)
-
 type FreeStatement struct {
 	Token lexer.Token
 	Name  *IdentifierExpression

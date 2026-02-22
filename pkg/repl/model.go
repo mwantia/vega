@@ -4,13 +4,16 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/mwantia/vega/pkg/alloc"
+	"github.com/mwantia/vega/pkg/compiler"
 	"github.com/mwantia/vega/pkg/vm"
 )
 
 // Model is the Bubble Tea model for the TUI REPL.
 type Model struct {
 	// VM and execution
-	vm vm.VirtualMachine
+	vm       vm.VirtualMachine
+	compiler *compiler.Compiler
 
 	// Input state
 	textInput   textinput.Model
@@ -29,10 +32,14 @@ type Model struct {
 	scrollOffset int
 	showResults  bool // When true, show expression results (like readdir output)
 
-	// Bytecode disasm
-	lastBytecode string
-	showDisasm   bool
-	disasmScroll int
+	// Bytecode disasm history (index 0 = most recent)
+	bytecodeHistory []BytecodeEntry
+	showDisasm      bool
+	disasmScroll    int
+
+	// Allocator hex viewer
+	allocSnapshot *alloc.AllocSnapshot
+	hexScroll     int
 
 	// Search mode
 	searchMode    bool

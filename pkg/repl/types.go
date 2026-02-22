@@ -36,6 +36,12 @@ type OutputLine struct {
 	Duration   time.Duration // Execution time for command lines
 }
 
+// BytecodeEntry holds the disassembled bytecode for a single command.
+type BytecodeEntry struct {
+	Index    int    // command index [N]
+	Bytecode string // disassembled output
+}
+
 // Status represents the REPL status.
 type Status int
 

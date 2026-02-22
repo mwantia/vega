@@ -64,11 +64,20 @@ func (c *Compiler) Compile(ast parser.AST) (*ByteCode, error) {
 		Instructions: make([]Instruction, 0),
 		Constants:    make([]Constant, 0),
 		LoopStack:    nil,
+		Functions:    make(map[string]*FunctionDef),
 	}
 
 	statements := ast.Statements()
 	if len(statements) == 0 {
 		return nil, fmt.Errorf("invalid program defined: expected statements")
+	}
+
+	// Initialize the top-level scope. Every variable lives in this scope
+	// (or in a per-function scope) and is backed by the global allocator.
+	// When reusing the same Compiler across REPL commands, preserve the
+	// existing scope so variable name→slot-ID assignments survive.
+	if c.scope == nil {
+		c.scope = newSymbolTable()
 	}
 
 	for _, stmt := range statements {
@@ -82,31 +91,7 @@ func (c *Compiler) Compile(ast parser.AST) (*ByteCode, error) {
 
 func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) error {
 	switch s := statement.(type) {
-	case *parser.AllocStatement:
-		intExpr, ok := s.Size.(*parser.IntegerExpression)
-		if !ok {
-			return fmt.Errorf("alloc size must be an integer literal, got %T", s.Size)
-		}
-		b.EmitArg(OpStackALLOC, int(intExpr.Value), s.Position().Line)
-
-		// Enter alloc scope
-		c.scope = newSymbolTable()
-
-		for _, stmt := range s.Body.Statements {
-			if err := c.compileStatement(b, stmt); err != nil {
-				return fmt.Errorf("failed to compile alloc body: %v", err)
-			}
-		}
-
-		// Exit alloc scope
-		c.scope = nil
-
-		b.Emit(OpStackFREE, s.Position().Line)
 	case *parser.AssignmentStatement:
-		if c.scope == nil {
-			return fmt.Errorf("assignment outside alloc block")
-		}
-
 		name := s.Name.Value
 
 		// Check if RHS is a struct literal expression
@@ -146,6 +131,18 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 			return fmt.Errorf("failed to compile assignment value: %v", err)
 		}
 
+		// Detect string assignments — strings use dynamic allocation via
+		// OpStrSTORE, bypassing the mask-based OpVarALLOC path entirely.
+		rhsTag, _ := c.inferTypeTag(s.Value)
+		if rhsTag == value.TagString {
+			if _, exists := c.scope.Lookup(name); !exists {
+				c.scope.Define(name, value.TagString, 0)
+			}
+			info, _ := c.scope.Lookup(name)
+			b.EmitArg(OpStrSTORE, info.SlotID, s.Position().Line)
+			return nil
+		}
+
 		if _, exists := c.scope.Lookup(name); !exists {
 			var mask byte
 			var inferredTag value.TypeTag
@@ -177,10 +174,6 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 		b.EmitArg(OpVarSTORE, info.SlotID, s.Position().Line)
 
 	case *parser.FreeStatement:
-		if c.scope == nil {
-			return fmt.Errorf("free outside alloc block")
-		}
-
 		name := s.Name.Value
 		info, exists := c.scope.Lookup(name)
 		if !exists {
@@ -213,6 +206,95 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 		stencil.TotalSize = offset
 		c.stencils[s.Name] = stencil
 
+	case *parser.FunctionStatement:
+		params := make([]ParamDef, len(s.Parameters))
+
+		for i, p := range s.Parameters {
+			if len(p.Constraints) != 1 {
+				return fmt.Errorf("function '%s': parameter '%s' must have exactly one type constraint",
+					s.Name.Value, p.Value)
+			}
+			ident, ok := p.Constraints[0].(*parser.IdentifierExpression)
+			if !ok {
+				return fmt.Errorf("function '%s': parameter '%s' type must be an identifier",
+					s.Name.Value, p.Value)
+			}
+			if tag, ok := value.TagForName(ident.Value); ok {
+				// Primitive type parameter (int, long, float, …)
+				mask := value.MaskForTag(tag)
+				params[i] = ParamDef{Name: p.Value, Tag: tag, Mask: mask}
+			} else if stencil, ok := c.stencils[ident.Value]; ok {
+				// Struct type parameter
+				params[i] = ParamDef{Name: p.Value, Stencil: stencil}
+			} else {
+				return fmt.Errorf("function '%s': parameter '%s': unknown type '%s'",
+					s.Name.Value, p.Value, ident.Value)
+			}
+		}
+
+		// Compile the function body into a separate ByteCode.
+		// Functions share the top-level function table so they can call each other.
+		fnCode := &ByteCode{
+			Instructions: make([]Instruction, 0),
+			Constants:    make([]Constant, 0),
+			Functions:    b.Functions,
+		}
+
+		// Enter function scope — parameters become variables in this scope.
+		oldScope := c.scope
+		c.scope = newSymbolTable()
+
+		// For each parameter: pull from the pending-args buffer, allocate a slot,
+		// and store the value.  Primitive and struct params use different sequences.
+		for i, param := range params {
+			if param.Stencil != nil {
+				// Struct parameter: allocate a stencil slot and bulk-copy the raw bytes.
+				// OpLoadArgStencil: Argument=pending index, Extra=slot ID, Offset=total size.
+				info := c.scope.Define(param.Name, 0, 0)
+				sym := c.scope.symbols[param.Name]
+				sym.Stencil = param.Stencil
+				c.scope.symbols[param.Name] = sym
+				params[i].SlotID = info.SlotID
+				fnCode.EmitField(OpLoadArgStencil, i, param.Stencil.TotalSize, byte(info.SlotID), s.Position().Line)
+			} else {
+				// Primitive parameter: push from pending args, allocate slot, store.
+				fnCode.EmitArg(OpLoadArg, i, s.Position().Line)
+				info := c.scope.Define(param.Name, param.Tag, param.Mask)
+				params[i].SlotID = info.SlotID
+				fnCode.EmitArgExtra(OpVarALLOC, info.SlotID, param.Mask, s.Position().Line)
+				fnCode.EmitArg(OpVarSTORE, info.SlotID, s.Position().Line)
+			}
+		}
+
+		// Compile body statements inside the function scope.
+		for _, stmt := range s.Body.Statements {
+			if err := c.compileStatement(fnCode, stmt); err != nil {
+				return fmt.Errorf("in function '%s': %w", s.Name.Value, err)
+			}
+		}
+
+		// Implicit void return at the end of the function.
+		fnCode.Emit(OpReturn, s.Position().Line)
+
+		// Restore the outer scope and register the compiled function.
+		c.scope = oldScope
+		b.Functions[s.Name.Value] = &FunctionDef{
+			Name:     s.Name.Value,
+			ByteCode: fnCode,
+			Params:   params,
+		}
+
+	case *parser.ReturnStatement:
+		if s.Value != nil {
+			if err := c.compileExpression(b, s.Value); err != nil {
+				return fmt.Errorf("return value: %w", err)
+			}
+			// extra=1 signals that a return value is on the expr stack.
+			b.EmitArgExtra(OpReturn, 0, 1, s.Position().Line)
+		} else {
+			b.Emit(OpReturn, s.Position().Line)
+		}
+
 	case *parser.CallStatement:
 		ident, ok := s.Function.(*parser.IdentifierExpression)
 		if !ok {
@@ -223,7 +305,12 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 				return fmt.Errorf("argument %d of call to '%s': %v", i, ident.Value, err)
 			}
 		}
-		b.EmitNameArg(OpCallNAT, ident.Value, len(s.Arguments), s.Position().Line)
+		// Prefer user-defined functions over native ones at compile time.
+		if _, isUserFunc := b.Functions[ident.Value]; isUserFunc {
+			b.EmitNameArg(OpCallFN, ident.Value, len(s.Arguments), s.Position().Line)
+		} else {
+			b.EmitNameArg(OpCallNAT, ident.Value, len(s.Arguments), s.Position().Line)
+		}
 
 	case *parser.DiscardStatement:
 		return fmt.Errorf("discard statements not yet implemented")
@@ -349,9 +436,10 @@ func (c *Compiler) compileExpression(b *ByteCode, expr parser.Expression) error 
 		constIdx := b.AddConstant(Constant{Tag: value.TagDecimal, Data: data})
 		b.EmitArg(OpLoadCONST, constIdx, e.Position().Line)
 	case *parser.CharExpression:
+		// char is not a distinct allocable type; lower the rune literal to int32.
 		data := make([]byte, 4)
 		binary.LittleEndian.PutUint32(data, uint32(e.Value))
-		constIdx := b.AddConstant(Constant{Tag: value.TagChar, Data: data})
+		constIdx := b.AddConstant(Constant{Tag: value.TagInteger, Data: data})
 		b.EmitArg(OpLoadCONST, constIdx, e.Position().Line)
 	case *parser.BooleanExpression:
 		data := []byte{0}
@@ -361,26 +449,40 @@ func (c *Compiler) compileExpression(b *ByteCode, expr parser.Expression) error 
 		constIdx := b.AddConstant(Constant{Tag: value.TagBoolean, Data: data})
 		b.EmitArg(OpLoadCONST, constIdx, e.Position().Line)
 	case *parser.StringExpression:
-		return fmt.Errorf("string literals are not allocable")
+		data := []byte(e.Value)
+		constIdx := b.AddConstant(Constant{Tag: value.TagString, Data: data})
+		b.EmitArg(OpLoadCONST, constIdx, e.Position().Line)
 	case *parser.NilExpression:
 		return fmt.Errorf("nil literals are not allocable")
 	case *parser.IdentifierExpression:
-		if c.scope == nil {
-			return fmt.Errorf("identifier '%s' outside alloc block", e.Value)
-		}
 		info, exists := c.scope.Lookup(e.Value)
 		if !exists {
 			return fmt.Errorf("undefined variable '%s'", e.Value)
 		}
-		b.EmitArg(OpVarLOAD, info.SlotID, e.Position().Line)
+		if info.Stencil != nil {
+			// Struct variable — push a snapshot of its raw bytes onto the expr stack
+			// so it can be passed as a function argument via OpCallFN.
+			b.EmitField(OpVarLoadRaw, info.SlotID, info.Stencil.TotalSize, 0, e.Position().Line)
+		} else {
+			b.EmitArg(OpVarLOAD, info.SlotID, e.Position().Line)
+		}
+	case *parser.PointerExpression:
+		// Inline pointer dereference used as an expression: *type(offset)
+		// Compile the offset, then emit OpPtrLOAD so the VM reads directly
+		// from the allocator at that offset and pushes the value.
+		tag, ok := value.TagForName(e.TypeName)
+		if !ok {
+			return fmt.Errorf("unknown type name '%s' in pointer expression", e.TypeName)
+		}
+		if err := c.compileExpression(b, e.Offset); err != nil {
+			return fmt.Errorf("failed to compile pointer offset: %v", err)
+		}
+		b.EmitArgExtra(OpPtrLOAD, 0, byte(tag), e.Position().Line)
 	case *parser.AttributeExpression:
 		// Field access on a struct/tuple: obj.field or obj.0
 		ident, ok := e.Object.(*parser.IdentifierExpression)
 		if !ok {
 			return fmt.Errorf("field access requires an identifier, got %T", e.Object)
-		}
-		if c.scope == nil {
-			return fmt.Errorf("identifier '%s' outside alloc block", ident.Value)
 		}
 		info, exists := c.scope.Lookup(ident.Value)
 		if !exists {
@@ -434,7 +536,9 @@ func (c *Compiler) inferTypeTag(expr parser.Expression) (value.TypeTag, error) {
 	case *parser.BooleanExpression:
 		return value.TagBoolean, nil
 	case *parser.CharExpression:
-		return value.TagChar, nil
+		return value.TagInteger, nil // char literals are lowered to int32
+	case *parser.StringExpression:
+		return value.TagString, nil
 	case *parser.PointerExpression:
 		tag, ok := value.TagForName(expr.TypeName)
 		if !ok {
@@ -442,25 +546,20 @@ func (c *Compiler) inferTypeTag(expr parser.Expression) (value.TypeTag, error) {
 		}
 		return tag, nil
 	case *parser.IdentifierExpression:
-		e := expr
-		if c.scope != nil {
-			if info, ok := c.scope.Lookup(e.Value); ok {
-				return info.Tag, nil
-			}
+		if info, ok := c.scope.Lookup(expr.Value); ok {
+			return info.Tag, nil
 		}
-		return 0, fmt.Errorf("cannot infer type from undefined variable '%s'", e.Value)
+		return 0, fmt.Errorf("cannot infer type from undefined variable '%s'", expr.Value)
 	case *parser.AttributeExpression:
 		ident, ok := expr.Object.(*parser.IdentifierExpression)
 		if !ok {
 			return 0, fmt.Errorf("cannot infer type from non-identifier attribute access")
 		}
-		if c.scope != nil {
-			if info, ok := c.scope.Lookup(ident.Value); ok && info.Stencil != nil {
-				if field, ok := info.Stencil.LookupField(expr.Attribute.Value); ok {
-					return field.Tag, nil
-				}
-				return 0, fmt.Errorf("struct '%s' has no field '%s'", info.Stencil.Name, expr.Attribute.Value)
+		if info, ok := c.scope.Lookup(ident.Value); ok && info.Stencil != nil {
+			if field, ok := info.Stencil.LookupField(expr.Attribute.Value); ok {
+				return field.Tag, nil
 			}
+			return 0, fmt.Errorf("struct '%s' has no field '%s'", info.Stencil.Name, expr.Attribute.Value)
 		}
 		return 0, fmt.Errorf("cannot infer type from attribute expression")
 	default:

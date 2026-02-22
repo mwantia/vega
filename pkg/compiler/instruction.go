@@ -13,8 +13,6 @@ type Instruction struct {
 
 func (i *Instruction) String() string {
 	switch i.Operation {
-	case OpStackALLOC:
-		return fmt.Sprintf("%s capacity=%d", i.Operation, i.Argument)
 	case OpLoadCONST:
 		return fmt.Sprintf("%s index=%d", i.Operation, i.Argument)
 	case OpVarALLOC:
@@ -29,6 +27,21 @@ func (i *Instruction) String() string {
 		return fmt.Sprintf("%s slot=%d offset=%d tag=%d", i.Operation, i.Argument, i.Offset, i.Extra)
 	case OpCallNAT:
 		return fmt.Sprintf("%s %s argc=%d", i.Operation, i.Name, i.Argument)
+	case OpCallFN:
+		return fmt.Sprintf("%s %s argc=%d", i.Operation, i.Name, i.Argument)
+	case OpReturn:
+		if i.Extra == 1 {
+			return fmt.Sprintf("%s value", i.Operation)
+		}
+		return fmt.Sprintf("%s void", i.Operation)
+	case OpLoadArg:
+		return fmt.Sprintf("%s index=%d", i.Operation, i.Argument)
+	case OpVarLoadRaw:
+		return fmt.Sprintf("%s slot=%d size=%d", i.Operation, i.Argument, i.Offset)
+	case OpLoadArgStencil:
+		return fmt.Sprintf("%s index=%d slot=%d size=%d", i.Operation, i.Argument, i.Extra, i.Offset)
+	case OpStrSTORE:
+		return fmt.Sprintf("%s slot=%d", i.Operation, i.Argument)
 	}
 
 	return i.Operation.String()

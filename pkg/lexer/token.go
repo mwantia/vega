@@ -70,7 +70,6 @@ const (
 	RETURN   TokenType = "RETURN"
 	BREAK    TokenType = "BREAK"
 	CONTINUE TokenType = "CONTINUE"
-	ALLOC    TokenType = "ALLOC"
 	FREE     TokenType = "FREE"
 	STRUCT   TokenType = "STRUCT"
 )
@@ -107,7 +106,7 @@ func (t Token) IsNewline() bool {
 // IsKeyword returns true if the token type is a keyword.
 func (t Token) IsKeyword() bool {
 	switch t.Type {
-	case TRUE, FALSE, NIL, IF, ELSE, FOR, WHILE, IN, FN, RETURN, BREAK, CONTINUE, ALLOC, FREE, STRUCT:
+	case TRUE, FALSE, NIL, IF, ELSE, FOR, WHILE, IN, FN, RETURN, BREAK, CONTINUE, FREE, STRUCT:
 		return true
 	}
 	return false
@@ -144,7 +143,6 @@ var keywords = map[string]TokenType{
 	"return":   RETURN,
 	"break":    BREAK,
 	"continue": CONTINUE,
-	"alloc":    ALLOC,
 	"free":     FREE,
 	"struct":   STRUCT,
 }

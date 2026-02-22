@@ -1,37 +1,19 @@
 package value
 
-import "encoding/binary"
-
-// CharValue wraps rune (int32). Size = 4 bytes.
-// The view slice points into the alloc buffer — no data is owned.
+// CharValue wraps a single Unicode code point (rune).
+// It is a plain Value used as the result of indexing a string — it is NOT
+// Allocable and has no TypeTag. Char as a language type has been replaced by
+// string (TagString = 8); char literals in scripts are lowered to int32.
 type CharValue struct {
-	view []byte
+	data rune
 }
 
-func NewChar(view []byte) *CharValue {
-	return &CharValue{
-		view: view,
-	}
+func NewChar(r rune) *CharValue {
+	return &CharValue{data: r}
 }
 
-func (v *CharValue) Type() string {
-	return "char"
-}
+func (v *CharValue) Type() string   { return "char" }
+func (v *CharValue) String() string { return string(v.data) }
+func (v *CharValue) Data() rune     { return v.data }
 
-func (v *CharValue) String() string {
-	return string(v.Data())
-}
-
-func (v *CharValue) Size() byte {
-	return 4
-}
-
-func (v *CharValue) Data() rune {
-	return rune(binary.LittleEndian.Uint32(v.view))
-}
-
-func (v *CharValue) View() []byte {
-	return v.view
-}
-
-var _ Allocable = (*CharValue)(nil)
+var _ Value = (*CharValue)(nil)
