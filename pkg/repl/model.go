@@ -30,7 +30,6 @@ type Model struct {
 	// Output
 	output       []OutputLine
 	scrollOffset int
-	showResults  bool // When true, show expression results (like readdir output)
 
 	// Bytecode disasm history (index 0 = most recent)
 	bytecodeHistory []BytecodeEntry
@@ -38,8 +37,9 @@ type Model struct {
 	disasmScroll    int
 
 	// Allocator hex viewer
-	allocSnapshot *alloc.AllocSnapshot
-	hexScroll     int
+	snapshotManager *alloc.SnapshotManager // persists for the session lifetime
+	snapshotDelta   alloc.SnapshotDelta    // delta from the most recent Take()
+	hexScroll       int
 
 	// Search mode
 	searchMode    bool

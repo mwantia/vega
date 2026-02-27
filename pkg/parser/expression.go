@@ -136,18 +136,6 @@ func (f *DecimalExpression) String() string                { return f.Literal() 
 
 var _ Expression = (*DecimalExpression)(nil)
 
-type CharExpression struct {
-	Token lexer.Token
-	Value rune
-}
-
-func (*CharExpression) Expression()                     {}
-func (c *CharExpression) Literal() string               { return c.Token.Literal }
-func (c *CharExpression) Position() lexer.TokenPosition { return c.Token.Position }
-func (c *CharExpression) String() string                { return "'" + string(c.Value) + "'" }
-
-var _ Expression = (*CharExpression)(nil)
-
 type StringExpression struct {
 	Token lexer.Token
 	Value string
@@ -588,6 +576,31 @@ func (s *StructExpression) String() string {
 }
 
 var _ Expression = (*StructExpression)(nil)
+
+// SliceTypeExpression represents a parameterised slice type annotation: TypeName<Capacity>.
+// It appears only in type-constraint positions (variable declarations, struct fields,
+// function parameters) — never as a general expression.
+type SliceTypeExpression struct {
+	Token    lexer.Token
+	TypeName string // "string", "byte", etc.
+	Capacity int    // declared capacity in bytes (always > 0)
+}
+
+func (*SliceTypeExpression) Expression() {}
+
+func (s *SliceTypeExpression) Literal() string {
+	return s.Token.Literal
+}
+
+func (s *SliceTypeExpression) Position() lexer.TokenPosition {
+	return s.Token.Position
+}
+
+func (s *SliceTypeExpression) String() string {
+	return fmt.Sprintf("%s<%d>", s.TypeName, s.Capacity)
+}
+
+var _ Expression = (*SliceTypeExpression)(nil)
 
 // TupleExpression represents a tuple literal: (expr, expr, ...)
 type TupleExpression struct {

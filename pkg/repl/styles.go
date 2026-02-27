@@ -71,29 +71,6 @@ var (
 				Background(lipgloss.Color("240")).
 				Foreground(lipgloss.Color("15"))
 
-	// Styles for pretty-printing values
-	keyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("14")).
-			Bold(true)
-
-	stringValueStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("10"))
-
-	numberValueStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("11"))
-
-	unknownValueStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("14"))
-
-	boolValueStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("13"))
-
-	nilValueStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("8"))
-
-	bracketStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("7"))
-
 	typeAnnotationStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("8")).
 				Italic(true)
@@ -129,4 +106,16 @@ var (
 	// hexByteStyle styles allocated bytes with a non-zero value.
 	hexByteStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("10"))
+
+	// hexNewlyFreedStyle highlights bytes freed during the last execution.
+	hexNewlyFreedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("2"))
+
+	// hexNewlyConsumedStyle highlights bytes freshly allocated during the last execution.
+	hexNewlyConsumedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("9"))
+
+	// hexWrittenStyle highlights already-allocated bytes whose value changed during the last execution.
+	hexWrittenStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11"))
 )

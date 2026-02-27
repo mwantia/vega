@@ -7,19 +7,19 @@ import (
 )
 
 func TestCapacity(t *testing.T) {
-	a := alloc.NewAllocator(32)
+	a := alloc.NewFreeListAllocator(32)
 	if a.Capacity() != 32 {
 		t.Errorf("Capacity() = %d, want 32", a.Capacity())
 	}
 
-	b := alloc.NewAllocator(1024)
+	b := alloc.NewFreeListAllocator(1024)
 	if b.Capacity() != 1024 {
 		t.Errorf("Capacity() = %d, want 1024", b.Capacity())
 	}
 }
 
 func TestSequentialAlloc(t *testing.T) {
-	a := alloc.NewAllocator(16)
+	a := alloc.NewFreeListAllocator(16)
 
 	off1, err := a.Alloc(4)
 	if err != nil {
@@ -51,7 +51,7 @@ func TestSequentialAlloc(t *testing.T) {
 }
 
 func TestOutOfMemory(t *testing.T) {
-	a := alloc.NewAllocator(8)
+	a := alloc.NewFreeListAllocator(8)
 
 	_, err := a.Alloc(4)
 	if err != nil {
@@ -65,7 +65,7 @@ func TestOutOfMemory(t *testing.T) {
 }
 
 func TestFreeAndReuse(t *testing.T) {
-	a := alloc.NewAllocator(8)
+	a := alloc.NewFreeListAllocator(8)
 
 	off1, _ := a.Alloc(4)
 	off2, _ := a.Alloc(4)
@@ -88,7 +88,7 @@ func TestFreeAndReuse(t *testing.T) {
 }
 
 func TestCoalesceRight(t *testing.T) {
-	a := alloc.NewAllocator(16)
+	a := alloc.NewFreeListAllocator(16)
 
 	off1, _ := a.Alloc(4) // [0..4)
 	off2, _ := a.Alloc(4) // [4..8)
@@ -109,7 +109,7 @@ func TestCoalesceRight(t *testing.T) {
 }
 
 func TestCoalesceLeft(t *testing.T) {
-	a := alloc.NewAllocator(16)
+	a := alloc.NewFreeListAllocator(16)
 
 	off1, _ := a.Alloc(4) // [0..4)
 	off2, _ := a.Alloc(4) // [4..8)
@@ -130,7 +130,7 @@ func TestCoalesceLeft(t *testing.T) {
 }
 
 func TestCoalesceBoth(t *testing.T) {
-	a := alloc.NewAllocator(12)
+	a := alloc.NewFreeListAllocator(12)
 
 	off1, _ := a.Alloc(4) // [0..4)
 	off2, _ := a.Alloc(4) // [4..8)
@@ -156,7 +156,7 @@ func TestCoalesceBoth(t *testing.T) {
 }
 
 func TestFirstFitWithHoles(t *testing.T) {
-	a := alloc.NewAllocator(16)
+	a := alloc.NewFreeListAllocator(16)
 
 	a.Alloc(4)            // [0..4)
 	off2, _ := a.Alloc(4) // [4..8)
@@ -186,7 +186,7 @@ func TestFirstFitWithHoles(t *testing.T) {
 }
 
 func TestWriteAndRead(t *testing.T) {
-	a := alloc.NewAllocator(16)
+	a := alloc.NewFreeListAllocator(16)
 	off, _ := a.Alloc(4)
 
 	data := []byte{0xDE, 0xAD, 0xBE, 0xEF}
@@ -201,7 +201,7 @@ func TestWriteAndRead(t *testing.T) {
 }
 
 func TestFreeZerosMemory(t *testing.T) {
-	a := alloc.NewAllocator(8)
+	a := alloc.NewFreeListAllocator(8)
 	off, _ := a.Alloc(4)
 
 	a.Write(off, []byte{0xFF, 0xFF, 0xFF, 0xFF})

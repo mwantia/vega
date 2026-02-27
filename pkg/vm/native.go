@@ -38,6 +38,7 @@ func lookupNative(name string) (NativeFunc, bool) {
 
 func init() {
 	RegisterNative("print", nativePrint)
+	RegisterNative("string", nativeString)
 	RegisterNative("type", nativeType)
 }
 
@@ -47,6 +48,14 @@ func nativePrint(nat *Native, args []value.Value) error {
 		parts[i] = arg.String()
 	}
 	_, err := fmt.Fprintln(nat.Stdout, strings.Join(parts, " "))
+	return err
+}
+
+func nativeString(nat *Native, args []value.Value) error {
+	if len(args) != 1 {
+		return fmt.Errorf("type expects 1 argument, got %d", len(args))
+	}
+	_, err := fmt.Fprintf(nat.Stdout, "%s", args[0].String())
 	return err
 }
 

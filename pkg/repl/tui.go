@@ -20,8 +20,6 @@ import (
 
 // NewTUI creates a new TUI REPL model.
 func NewTUI(v vm.VirtualMachine, disasm bool) Model {
-	v.StartSession()
-
 	ti := textinput.New()
 	ti.Prompt = "" // Remove default "> " prompt
 	ti.Placeholder = ""
@@ -145,16 +143,6 @@ func (m Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+l":
 		m.output = nil
 		m.scrollOffset = 0
-		return m, nil
-
-	case "ctrl+o":
-		// Toggle showing expression results
-		m.showResults = !m.showResults
-		if m.showResults {
-			m.statusMsg = "Results ON"
-		} else {
-			m.statusMsg = "Results OFF"
-		}
 		return m, nil
 
 	case "ctrl+u":
@@ -389,8 +377,9 @@ func (m *Model) handleCommand(line string) (bool, tea.Cmd) {
 
 func (m *Model) resetSession() {
 	m.compiler = compiler.NewCompiler()
-	m.vm.ResetSession()
-	m.vm.StartSession()
+	if err := m.vm.ResetSession(); err != nil {
+		m.addOutput(fmt.Sprintf("Reset Session: %v", err), OutputError, -1)
+	}
 	m.bytecodeHistory = nil
 	m.disasmScroll = 0
 	m.addOutput("Session reset.", OutputInfo, -1)
@@ -491,9 +480,13 @@ func (m *Model) executeAs(label, source string) {
 	// Record duration
 	m.output[cmdOutputIdx].Duration = time.Since(startTime)
 
-	// Snapshot allocator state for the hex viewer (always, even on error)
-	if snap := m.vm.Snapshot(); snap != nil {
-		m.allocSnapshot = snap
+	// Record an incremental snapshot for the hex viewer (always, even on error).
+	// Lazily bind the manager on first use so we don't depend on init order.
+	if m.snapshotManager == nil {
+		m.snapshotManager, _ = m.vm.SnapshotManager()
+	}
+	if m.snapshotManager != nil {
+		m.snapshotDelta, _ = m.snapshotManager.Take()
 		m.hexScroll = 1 << 30 // sentinel: clamp to end in renderHexPane
 	}
 
@@ -525,18 +518,6 @@ func (m *Model) executeAs(label, source string) {
 		for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
 			m.addOutput(line, OutputError, cmdIdx)
 		}
-	}
-
-	// Show expression result only if showResults is enabled
-	if m.showResults {
-		/* if result := m.vm.LastPopped(); result != nil {
-			if result.Type() != "nil" {
-				formatted := m.formatValue(result, 0)
-				for _, line := range strings.Split(formatted, "\n") {
-					m.addOutput(line, OutputNormal, cmdIdx)
-				}
-			}
-		} */
 	}
 
 	m.status = StatusReady
@@ -571,7 +552,6 @@ func (m *Model) printHelp() {
 	m.addOutput("Key bindings:", OutputInfo, -1)
 	m.addOutput("  Ctrl+R   - Search history", OutputInfo, -1)
 	m.addOutput("  Ctrl+L   - Clear screen", OutputInfo, -1)
-	m.addOutput("  Ctrl+O   - Toggle expression results (e.g. readdir output)", OutputInfo, -1)
 	m.addOutput("  Ctrl+D   - Toggle disasm (at empty prompt)", OutputInfo, -1)
 	m.addOutput("  Ctrl+U   - Clear current line", OutputInfo, -1)
 	m.addOutput("  Ctrl+C   - Quit", OutputInfo, -1)
@@ -739,12 +719,23 @@ func formatDuration(d time.Duration) string {
 
 // isFreeAt reports whether the byte at offset falls within a free block.
 // freeList must be sorted by offset (as maintained by the Allocator).
-func isFreeAt(freeList []alloc.FreeBlock, offset int) bool {
-	for _, block := range freeList {
-		if block.Offset > offset {
+func isFreeAt(freedRegions []alloc.Region, offset int) bool {
+	for _, region := range freedRegions {
+		if region.Offset > offset {
 			break
 		}
-		if offset < block.Offset+block.Size {
+		if offset < region.Offset+region.Size {
+			return true
+		}
+	}
+	return false
+}
+
+// isInWriteChanges reports whether the byte at offset was part of a write
+// that changed its value in the most recent snapshot delta.
+func isInWriteChanges(writes []alloc.WriteChange, offset int) bool {
+	for _, w := range writes {
+		if offset >= w.Offset && offset < w.Offset+len(w.New) {
 			return true
 		}
 	}
@@ -763,14 +754,14 @@ func formatBytes(n int) string {
 	}
 }
 
-func (m Model) renderHexRow(buf []byte, freeList []alloc.FreeBlock, offset, bytesPerRow int) string {
+func (m Model) renderHexRow(buf []byte, freedRegions []alloc.Region, delta alloc.SnapshotDelta, offset, bytesPerRow int) string {
 	var sb strings.Builder
 
 	// Address column
 	sb.WriteString(hexAddrStyle.Render(fmt.Sprintf("%08x  ", offset)))
 
 	// Hex bytes — split into two groups with an extra space in the middle
-	for i := 0; i < bytesPerRow; i++ {
+	for i := range bytesPerRow {
 		if i == bytesPerRow/2 {
 			sb.WriteString(" ")
 		}
@@ -780,10 +771,19 @@ func (m Model) renderHexRow(buf []byte, freeList []alloc.FreeBlock, offset, byte
 			continue
 		}
 		b := buf[byteOffset]
-		free := isFreeAt(freeList, byteOffset)
+		free := isFreeAt(freedRegions, byteOffset)
 		switch {
+		case free && isFreeAt(delta.Freed, byteOffset):
+			// Newly returned to the pool this execution — highlight green.
+			sb.WriteString(hexNewlyFreedStyle.Render("·· "))
 		case free:
 			sb.WriteString(hexFreeStyle.Render("·· "))
+		case isFreeAt(delta.Consumed, byteOffset):
+			// Freshly allocated this execution — highlight red.
+			sb.WriteString(hexNewlyConsumedStyle.Render(fmt.Sprintf("%02x ", b)))
+		case isInWriteChanges(delta.Writes, byteOffset):
+			// Already-allocated byte whose value changed — highlight yellow.
+			sb.WriteString(hexWrittenStyle.Render(fmt.Sprintf("%02x ", b)))
 		case b == 0:
 			sb.WriteString(hexZeroStyle.Render("00 "))
 		default:
@@ -800,7 +800,7 @@ func (m Model) renderHexRow(buf []byte, freeList []alloc.FreeBlock, offset, byte
 			continue
 		}
 		b := buf[byteOffset]
-		free := isFreeAt(freeList, byteOffset)
+		region := isFreeAt(freedRegions, byteOffset)
 		var ch string
 		if b >= 32 && b < 127 {
 			ch = string(rune(b))
@@ -808,8 +808,14 @@ func (m Model) renderHexRow(buf []byte, freeList []alloc.FreeBlock, offset, byte
 			ch = "·"
 		}
 		switch {
-		case free:
+		case region && isFreeAt(delta.Freed, byteOffset):
+			sb.WriteString(hexNewlyFreedStyle.Render(ch))
+		case region:
 			sb.WriteString(hexFreeStyle.Render(ch))
+		case isFreeAt(delta.Consumed, byteOffset):
+			sb.WriteString(hexNewlyConsumedStyle.Render(ch))
+		case isInWriteChanges(delta.Writes, byteOffset):
+			sb.WriteString(hexWrittenStyle.Render(ch))
 		case b == 0:
 			sb.WriteString(hexZeroStyle.Render(ch))
 		default:
@@ -826,7 +832,7 @@ func (m Model) renderHexPane(width, height int) string {
 	title := hexTitleStyle.Render("  Allocator Buffer")
 	lines = append(lines, padOrTruncate(title, width))
 
-	if m.allocSnapshot == nil {
+	if m.snapshotManager == nil {
 		lines = append(lines, hexInfoStyle.Render("  (no snapshot — execute code to see memory)"))
 		for len(lines) < height {
 			lines = append(lines, "")
@@ -834,15 +840,15 @@ func (m Model) renderHexPane(width, height int) string {
 		return strings.Join(lines[:height], "\n")
 	}
 
-	snap := m.allocSnapshot
+	snap := m.snapshotManager.Current()
 	buf := snap.Buffer
 
 	// Compute stats
 	freeBytes := 0
-	for _, block := range snap.FreeList {
-		freeBytes += block.Size
+	for _, region := range snap.FreedRegions {
+		freeBytes += region.Size
 	}
-	usedBytes := snap.Capacity - freeBytes
+	usedBytes := len(buf) - freeBytes
 
 	// Find the last non-zero byte to avoid showing megabytes of zeros
 	lastUsed := -1
@@ -860,7 +866,7 @@ func (m Model) renderHexPane(width, height int) string {
 	}
 
 	info := fmt.Sprintf("  Cap: %s  Used: %s  Free: %s  Rows: %d",
-		formatBytes(snap.Capacity), formatBytes(usedBytes), formatBytes(freeBytes), totalRows)
+		formatBytes(len(buf)), formatBytes(usedBytes), formatBytes(freeBytes), totalRows)
 	lines = append(lines, hexInfoStyle.Render(info))
 
 	contentRows := height - len(lines)
@@ -884,7 +890,7 @@ func (m Model) renderHexPane(width, height int) string {
 		}
 
 		for row := startRow; row < startRow+contentRows && row < totalRows; row++ {
-			line := m.renderHexRow(buf, snap.FreeList, row*bytesPerRow, bytesPerRow)
+			line := m.renderHexRow(buf, snap.FreedRegions, m.snapshotDelta, row*bytesPerRow, bytesPerRow)
 			lines = append(lines, truncateToWidth(line, width))
 		}
 	}
@@ -1053,17 +1059,8 @@ func (m Model) renderMainPane(width, height int) string {
 		// Calculate the visible window based on scroll offset
 		// scrollOffset = 0 means we're at the bottom (most recent)
 		// scrollOffset > 0 means we're scrolled up
-		endIdx := totalLines - m.scrollOffset
-		if endIdx < height {
-			endIdx = height
-		}
-		if endIdx > totalLines {
-			endIdx = totalLines
-		}
-		startIdx := endIdx - height
-		if startIdx < 0 {
-			startIdx = 0
-		}
+		endIdx := min(max(totalLines-m.scrollOffset, height), totalLines)
+		startIdx := max(endIdx-height, 0)
 		lines = lines[startIdx:endIdx]
 	}
 
@@ -1179,12 +1176,6 @@ func (m Model) renderStatusBar() string {
 	if m.scrollOffset > 0 {
 		scrollInfo := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(fmt.Sprintf(" [↑%d]", m.scrollOffset))
 		left += scrollInfo
-	}
-
-	// Show results indicator
-	if m.showResults {
-		resultsInfo := lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(" [RESULTS]")
-		left += resultsInfo
 	}
 
 	var hints []string
@@ -1428,204 +1419,6 @@ func wrapText(s string, width int) []string {
 
 	return lines
 }
-
-// formatValue pretty-prints a value with indentation and colors.
-/*func (m *Model) formatValue(v value.Value, indent int) string {
-	switch val := v.(type) {
-	case *value.Metadata:
-		return m.formatMetadata(val, indent)
-	case *value.Map:
-		return m.formatMap(val, indent)
-	case *value.Array:
-		return m.formatArray(val, indent)
-	case *value.String:
-		return stringValueStyle.Render(fmt.Sprintf("%q", val.String())) + typeAnnotationStyle.Render(" (string)")
-	case *value.Short:
-		return numberValueStyle.Render(val.String()) + typeAnnotationStyle.Render(" (short)")
-	case *value.Integer:
-		return numberValueStyle.Render(val.String()) + typeAnnotationStyle.Render(" (integer)")
-	case *value.Long:
-		return numberValueStyle.Render(val.String()) + typeAnnotationStyle.Render(" (long)")
-	case *value.Float:
-		return numberValueStyle.Render(val.String()) + typeAnnotationStyle.Render(" (float)")
-	case *value.Boolean:
-		return boolValueStyle.Render(val.String()) + typeAnnotationStyle.Render(" (boolean)")
-	case *value.NilValue:
-		return nilValueStyle.Render("nil")
-	default:
-		return unknownValueStyle.Render(val.String()) + typeAnnotationStyle.Render(fmt.Sprintf(" (%s)", val.Type()))
-	}
-}*/
-
-// formatMap pretty-prints a map value.
-/*func (m *Model) formatMap(mv *value.Map, indent int) string {
-	if len(mv.Pairs) == 0 {
-		return bracketStyle.Render("{}")
-	}
-
-	// For small maps (1-2 items), keep on one line
-	if len(mv.Pairs) <= 2 {
-		var parts []string
-		for _, k := range mv.Order {
-			if v, ok := mv.Pairs[k]; ok {
-				key := keyStyle.Render(k)
-				val := m.formatValueInline(v)
-				parts = append(parts, key+": "+val)
-			}
-		}
-		return bracketStyle.Render("{") + " " + strings.Join(parts, ", ") + " " + bracketStyle.Render("}")
-	}
-
-	// For larger maps, use multiple lines with indentation
-	indentStr := strings.Repeat("  ", indent)
-	innerIndent := strings.Repeat("  ", indent+1)
-
-	var lines []string
-	lines = append(lines, bracketStyle.Render("{"))
-
-	for i, k := range mv.Order {
-		if v, ok := mv.Pairs[k]; ok {
-			key := keyStyle.Render(k)
-			val := m.formatValue(v, indent+1)
-
-			comma := ","
-			if i == len(mv.Order)-1 {
-				comma = ""
-			}
-
-			// Handle multi-line values
-			if strings.Contains(val, "\n") {
-				lines = append(lines, innerIndent+key+": "+val+comma)
-			} else {
-				lines = append(lines, innerIndent+key+": "+val+comma)
-			}
-		}
-	}
-
-	lines = append(lines, indentStr+bracketStyle.Render("}"))
-	return strings.Join(lines, "\n")
-}*/
-
-// formatArray pretty-prints an array value.
-/*func (m *Model) formatArray(av *value.Array, indent int) string {
-	if len(av.Elements) == 0 {
-		return bracketStyle.Render("[]")
-	}
-
-	// For small arrays (1-5 simple items), keep on one line
-	if len(av.Elements) <= 5 && !m.hasNestedStructures(av) {
-		var parts []string
-		for _, e := range av.Elements {
-			parts = append(parts, m.formatValueInline(e))
-		}
-		return bracketStyle.Render("[") + strings.Join(parts, ", ") + bracketStyle.Render("]")
-	}
-
-	// For larger arrays, use multiple lines
-	indentStr := strings.Repeat("  ", indent)
-	innerIndent := strings.Repeat("  ", indent+1)
-
-	var lines []string
-	lines = append(lines, bracketStyle.Render("["))
-
-	for i, e := range av.Elements {
-		val := m.formatValue(e, indent+1)
-		comma := ","
-		if i == len(av.Elements)-1 {
-			comma = ""
-		}
-		lines = append(lines, innerIndent+val+comma)
-	}
-
-	lines = append(lines, indentStr+bracketStyle.Render("]"))
-	return strings.Join(lines, "\n")
-}*/
-
-// formatMetadata pretty-prints a metadata value.
-/*func (m *Model) formatMetadata(mv *value.Metadata, indent int) string {
-	indentStr := strings.Repeat("  ", indent)
-	innerIndent := strings.Repeat("  ", indent+1)
-
-	meta := mv.Meta
-	typeStr := string(meta.GetType())
-
-	var lines []string
-	lines = append(lines, typeAnnotationStyle.Render("metadata")+" "+bracketStyle.Render("{"))
-
-	// Core fields
-	lines = append(lines, innerIndent+keyStyle.Render("key")+": "+stringValueStyle.Render(fmt.Sprintf("%q", meta.Key))+",")
-	lines = append(lines, innerIndent+keyStyle.Render("type")+": "+stringValueStyle.Render(fmt.Sprintf("%q", typeStr))+",")
-	lines = append(lines, innerIndent+keyStyle.Render("size")+": "+numberValueStyle.Render(fmt.Sprintf("%d", meta.Size))+",")
-
-	// Mode and permissions
-	lines = append(lines, innerIndent+keyStyle.Render("mode")+": "+numberValueStyle.Render(fmt.Sprintf("%o", meta.Mode))+",")
-
-	// Timestamps
-	lines = append(lines, innerIndent+keyStyle.Render("modified")+": "+stringValueStyle.Render(fmt.Sprintf("%q", meta.ModifyTime.Format("2006-01-02 15:04:05")))+",")
-	lines = append(lines, innerIndent+keyStyle.Render("created")+": "+stringValueStyle.Render(fmt.Sprintf("%q", meta.CreateTime.Format("2006-01-02 15:04:05")))+",")
-
-	// Content type if set
-	if meta.ContentType != "" {
-		lines = append(lines, innerIndent+keyStyle.Render("contentType")+": "+stringValueStyle.Render(fmt.Sprintf("%q", meta.ContentType))+",")
-	}
-
-	// ETag if set
-	if meta.ETag != "" {
-		lines = append(lines, innerIndent+keyStyle.Render("etag")+": "+stringValueStyle.Render(fmt.Sprintf("%q", meta.ETag))+",")
-	}
-
-	lines = append(lines, indentStr+bracketStyle.Render("}"))
-	return strings.Join(lines, "\n")
-}*/
-
-// formatValueInline formats a value for inline display (no newlines).
-/*func (m *Model) formatValueInline(v value.Value) string {
-	switch val := v.(type) {
-	case *value.String:
-		return stringValueStyle.Render(val.String())
-	case *value.Integer:
-		return numberValueStyle.Render(val.String())
-	case *value.Float:
-		return numberValueStyle.Render(val.String())
-	case *value.Boolean:
-		return boolValueStyle.Render(val.String())
-	case *value.NilValue:
-		return nilValueStyle.Render("nil")
-	case *value.Metadata:
-		// Compact inline format for metadata
-		return typeAnnotationStyle.Render("metadata") + bracketStyle.Render("{") +
-			keyStyle.Render("key") + ": " + stringValueStyle.Render(fmt.Sprintf("%q", val.Meta.Key)) + ", " +
-			keyStyle.Render("type") + ": " + stringValueStyle.Render(fmt.Sprintf("%q", val.Meta.GetType())) +
-			bracketStyle.Render("}")
-	case *value.Map:
-		var parts []string
-		for _, k := range val.Order {
-			if vv, ok := val.Pairs[k]; ok {
-				parts = append(parts, keyStyle.Render(k)+": "+m.formatValueInline(vv))
-			}
-		}
-		return bracketStyle.Render("{") + strings.Join(parts, ", ") + bracketStyle.Render("}")
-	case *value.Array:
-		var parts []string
-		for _, e := range val.Elements {
-			parts = append(parts, m.formatValueInline(e))
-		}
-		return bracketStyle.Render("[") + strings.Join(parts, ", ") + bracketStyle.Render("]")
-	default:
-		return unknownValueStyle.Render(v.String())
-	}
-}*/
-
-// hasNestedStructures checks if an array contains maps, arrays, or metadata.
-/*func (m *Model) hasNestedStructures(av *value.Array) bool {
-	for _, e := range av.Elements {
-		switch e.(type) {
-		case *value.Map, *value.Array, *value.Metadata:
-			return true
-		}
-	}
-	return false
-}*/
 
 // RunTUI starts the TUI REPL.
 func RunTUI(v vm.VirtualMachine, disasm bool) error {

@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mwantia/vega/pkg/alloc"
 	"github.com/mwantia/vega/pkg/compiler"
@@ -10,13 +11,14 @@ import (
 )
 
 type SlotEntry struct {
-	Offset  int
-	Size    int
-	Tag     value.TypeTag
-	Mask    byte
-	Alive   bool
-	Alias   bool // true = manually positioned pointer, not allocator-owned
-	Stencil bool // true = stencil-based allocation (struct/tuple)
+	Offset   int
+	Capacity int           // bytes allocated in the allocator for this slot
+	Tag      value.TypeTag
+	Mask     byte
+	Alive    bool
+	Alias    bool // true = manually positioned pointer, not allocator-owned
+	Stencil  bool // true = stencil-based allocation (struct/tuple)
+	InRegion bool // true = bump-allocated inside the enclosing frame's contiguous region
 }
 
 type Runtime struct {
@@ -24,7 +26,7 @@ type Runtime struct {
 	Index  int
 
 	exprStack *ExprStack
-	allocator *alloc.Allocator // global allocator shared across all scopes
+	allocator alloc.Allocator // global allocator shared across all scopes
 	slots     []SlotEntry
 	native    *Native
 
@@ -46,6 +48,14 @@ type CallFrame struct {
 	// ExprCall is true when this frame was entered from an expression context
 	// (i.e. the return value is expected on the caller's stack).
 	ExprCall bool
+
+	// Frame region: a single contiguous block of the global allocator claimed
+	// at frame entry for all fixed-size locals. Released atomically at frame
+	// exit. RegionSize==0 means no region (top-level frame, or a function
+	// whose locals are all strings).
+	RegionOffset int
+	RegionSize   int
+	bumpPtr      int // next free byte within [RegionOffset, RegionOffset+RegionSize)
 
 	// Saved caller state — restored when this frame returns.
 	savedExprStack *ExprStack
@@ -115,9 +125,24 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpVarALLOC': no allocator active")
 		}
 
-		offset, err := r.allocator.Alloc(size)
-		if err != nil {
-			return fmt.Errorf("instr 'OpVarALLOC': %w", err)
+		var offset int
+		var inRegion bool
+		currentFrame := r.IndexedFrame()
+		if currentFrame.RegionSize > 0 {
+			// Bump-allocate within the frame's pre-claimed contiguous region.
+			if currentFrame.bumpPtr+size > currentFrame.RegionOffset+currentFrame.RegionSize {
+				return fmt.Errorf("instr 'OpVarALLOC': frame region exhausted (bump=%d size=%d region=[%d,%d))",
+					currentFrame.bumpPtr, size, currentFrame.RegionOffset, currentFrame.RegionOffset+currentFrame.RegionSize)
+			}
+			offset = currentFrame.bumpPtr
+			currentFrame.bumpPtr += size
+			inRegion = true
+		} else {
+			var err error
+			offset, err = r.allocator.Alloc(size)
+			if err != nil {
+				return fmt.Errorf("instr 'OpVarALLOC': %w", err)
+			}
 		}
 
 		// Grow slot table if needed
@@ -125,11 +150,12 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			r.slots = append(r.slots, SlotEntry{})
 		}
 		r.slots[slotID] = SlotEntry{
-			Offset: offset,
-			Size:   size,
-			Tag:    0, // uninitialized until first store
-			Mask:   mask,
-			Alive:  true,
+			Offset:   offset,
+			Capacity: size,
+			Tag:      0, // uninitialized until first store
+			Mask:     mask,
+			Alive:    true,
+			InRegion: inRegion,
 		}
 
 	case compiler.OpVarSTORE:
@@ -161,8 +187,11 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 
 		// Copy the value's backing bytes into the alloc buffer.
 		// This is the one copy point: from constant/temporary → alloc buffer.
-		dest := r.allocator.Slice(slot.Offset, slot.Size)
 		src := alloc.View()
+		if tag == value.TagSlice && len(src) > slot.Capacity {
+			return fmt.Errorf("instr 'OpVarSTORE': slice value (%d bytes) exceeds slot capacity (%d bytes)", len(src), slot.Capacity)
+		}
+		dest := r.allocator.Slice(slot.Offset, slot.Capacity)
 		n := copy(dest, src)
 		for i := n; i < len(dest); i++ {
 			dest[i] = 0
@@ -185,10 +214,10 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 
 		// Create a view-based value that points directly into the alloc buffer.
 		// No copy — the value reads from the allocator's memory.
-		// For strings (variable length) use slot.Size; for fixed types use SizeForTag.
+		// For slices use the full capacity; for fixed types use SizeForTag.
 		var view []byte
-		if slot.Tag == value.TagString {
-			view = r.allocator.Slice(slot.Offset, slot.Size)
+		if slot.Tag == value.TagSlice {
+			view = r.allocator.Slice(slot.Offset, slot.Capacity)
 		} else {
 			view = r.allocator.Slice(slot.Offset, value.SizeForTag(slot.Tag))
 		}
@@ -209,59 +238,51 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		}
 
 		slot := r.slots[slotID]
-		r.allocator.Free(slot.Offset, slot.Size)
+		if !slot.InRegion {
+			// Region slots are owned by the frame and freed atomically at frame
+			// exit — do not return them to the global allocator individually.
+			r.allocator.Free(slot.Offset, slot.Capacity)
+		}
 		r.slots[slotID].Alive = false
 
-	case compiler.OpStrSTORE:
+	case compiler.OpSliceALLOC:
 		slotID := instr.Argument
+		capacity := instr.Offset
 
-		if r.exprStack == nil {
-			return fmt.Errorf("instr 'OpStrSTORE': undefined stack")
-		}
 		if r.allocator == nil {
-			return fmt.Errorf("instr 'OpStrSTORE': no allocator active")
+			return fmt.Errorf("instr 'OpSliceALLOC': no allocator active")
 		}
 
-		val, err := r.exprStack.Pop()
-		if err != nil {
-			return fmt.Errorf("instr 'OpStrSTORE': %w", err)
+		var offset int
+		var inRegion bool
+		currentFrame := r.IndexedFrame()
+		if currentFrame.RegionSize > 0 {
+			if currentFrame.bumpPtr+capacity > currentFrame.RegionOffset+currentFrame.RegionSize {
+				return fmt.Errorf("instr 'OpSliceALLOC': frame region exhausted (bump=%d capacity=%d region=[%d,%d))",
+					currentFrame.bumpPtr, capacity, currentFrame.RegionOffset, currentFrame.RegionOffset+currentFrame.RegionSize)
+			}
+			offset = currentFrame.bumpPtr
+			currentFrame.bumpPtr += capacity
+			inRegion = true
+		} else {
+			var err error
+			offset, err = r.allocator.Alloc(capacity)
+			if err != nil {
+				return fmt.Errorf("instr 'OpSliceALLOC': %w", err)
+			}
 		}
 
-		sv, ok := val.(*value.StringValue)
-		if !ok {
-			return fmt.Errorf("instr 'OpStrSTORE': expected string value, got %T", val)
-		}
-
-		need := len(sv.View())
-
-		// Grow slot table if needed.
 		for len(r.slots) <= slotID {
 			r.slots = append(r.slots, SlotEntry{})
 		}
-
-		slot := &r.slots[slotID]
-		if !slot.Alive {
-			// First assignment — allocate fresh.
-			offset, err := r.allocator.Alloc(need)
-			if err != nil {
-				return fmt.Errorf("instr 'OpStrSTORE': %w", err)
-			}
-			slot.Offset = offset
-			slot.Size = need
-			slot.Tag = value.TagString
-			slot.Alive = true
-		} else if slot.Size != need {
-			// Reassignment with different length — free old, alloc new.
-			r.allocator.Free(slot.Offset, slot.Size)
-			offset, err := r.allocator.Alloc(need)
-			if err != nil {
-				return fmt.Errorf("instr 'OpStrSTORE': realloc: %w", err)
-			}
-			slot.Offset = offset
-			slot.Size = need
+		r.slots[slotID] = SlotEntry{
+			Offset:   offset,
+			Capacity: capacity,
+			Tag:      0, // uninitialized until first OpVarSTORE
+			Mask:     value.MaskForTag(value.TagSlice),
+			Alive:    true,
+			InRegion: inRegion,
 		}
-
-		copy(r.allocator.Slice(slot.Offset, slot.Size), sv.View())
 
 	case compiler.OpVarPTR:
 		slotID := instr.Argument
@@ -291,8 +312,8 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpVarPTR': no allocator active")
 		}
 
-		if offset < 0 || offset+size > r.allocator.Capacity() {
-			return fmt.Errorf("instr 'OpVarPTR': pointer out of bounds (offset=%d, size=%d, capacity=%d)", offset, size, r.allocator.Capacity())
+		if offset < 0 || offset+size > r.allocator.Size() {
+			return fmt.Errorf("instr 'OpVarPTR': pointer out of bounds (offset=%d, size=%d, size=%d)", offset, size, r.allocator.Size())
 		}
 
 		// Grow slot table if needed
@@ -300,12 +321,12 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			r.slots = append(r.slots, SlotEntry{})
 		}
 		r.slots[slotID] = SlotEntry{
-			Offset: offset,
-			Size:   size,
-			Tag:    tag,
-			Mask:   value.MaskForTag(tag),
-			Alive:  true,
-			Alias:  true,
+			Offset:   offset,
+			Capacity: size,
+			Tag:      tag,
+			Mask:     value.MaskForTag(tag),
+			Alive:    true,
+			Alias:    true,
 		}
 
 	case compiler.OpStencilALLOC:
@@ -316,21 +337,35 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpStencilALLOC': no allocator active")
 		}
 
-		offset, err := r.allocator.Alloc(totalSize)
-		if err != nil {
-			return fmt.Errorf("instr 'OpStencilALLOC': %w", err)
+		var offset int
+		var inRegion bool
+		currentFrame := r.IndexedFrame()
+		if currentFrame.RegionSize > 0 {
+			if currentFrame.bumpPtr+totalSize > currentFrame.RegionOffset+currentFrame.RegionSize {
+				return fmt.Errorf("instr 'OpStencilALLOC': frame region exhausted")
+			}
+			offset = currentFrame.bumpPtr
+			currentFrame.bumpPtr += totalSize
+			inRegion = true
+		} else {
+			var err error
+			offset, err = r.allocator.Alloc(totalSize)
+			if err != nil {
+				return fmt.Errorf("instr 'OpStencilALLOC': %w", err)
+			}
 		}
 
 		for len(r.slots) <= slotID {
 			r.slots = append(r.slots, SlotEntry{})
 		}
 		r.slots[slotID] = SlotEntry{
-			Offset:  offset,
-			Size:    totalSize,
-			Tag:     0,
-			Mask:    0,
-			Alive:   true,
-			Stencil: true,
+			Offset:   offset,
+			Capacity: totalSize,
+			Tag:      0,
+			Mask:     0,
+			Alive:    true,
+			Stencil:  true,
+			InRegion: inRegion,
 		}
 
 	case compiler.OpFieldSTORE:
@@ -361,10 +396,16 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		}
 
 		slot := r.slots[slotID]
-		fieldSize := value.SizeForTag(tag)
-		dest := r.allocator.Slice(slot.Offset+fieldOffset, fieldSize)
+		fieldSize := fieldSizeFor(tag, instr.Size)
 		src := alloc.View()
-		copy(dest, src)
+		if tag == value.TagSlice && len(src) > fieldSize {
+			return fmt.Errorf("instr 'OpFieldSTORE': slice value (%d bytes) exceeds field capacity (%d bytes)", len(src), fieldSize)
+		}
+		dest := r.allocator.Slice(slot.Offset+fieldOffset, fieldSize)
+		n := copy(dest, src)
+		for i := n; i < len(dest); i++ {
+			dest[i] = 0
+		}
 
 	case compiler.OpFieldLOAD:
 		slotID := instr.Argument
@@ -379,7 +420,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		}
 
 		slot := r.slots[slotID]
-		fieldSize := value.SizeForTag(tag)
+		fieldSize := fieldSizeFor(tag, instr.Size)
 		view := r.allocator.Slice(slot.Offset+fieldOffset, fieldSize)
 		val, err := value.Wrap(tag, view)
 		if err != nil {
@@ -388,7 +429,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		r.exprStack.Push(val)
 
 	case compiler.OpCallNAT:
-		name := instr.Name
+		name := frame.ByteCode.Names[instr.Offset]
 		argc := instr.Argument
 
 		fn, ok := lookupNative(name)
@@ -410,7 +451,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		}
 
 	case compiler.OpCallFN:
-		name := instr.Name
+		name := frame.ByteCode.Names[instr.Offset]
 		argc := instr.Argument
 
 		fn, ok := r.userFuncs[name]
@@ -449,9 +490,28 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if r.Index >= MaxFrames {
 			return fmt.Errorf("instr 'OpCallFN': call stack overflow")
 		}
+
+		// Pre-allocate a contiguous region for all fixed-size locals so that
+		// individual OpVarALLOC/OpStencilALLOC instructions can bump-allocate
+		// within it — no per-slot free-list lookups during the call.
+		var regionOffset, regionSize, bumpPtr int
+		if fn.FrameSize > 0 {
+			off, err := r.allocator.Alloc(fn.FrameSize)
+			if err != nil {
+				r.Index-- // roll back before returning
+				return fmt.Errorf("instr 'OpCallFN' ('%s'): frame region: %w", name, err)
+			}
+			regionOffset = off
+			regionSize = fn.FrameSize
+			bumpPtr = off
+		}
+
 		r.Frames[r.Index] = &CallFrame{
-			ByteCode: fn.ByteCode,
-			ExprCall: false, // statement context — return value is discarded
+			ByteCode:     fn.ByteCode,
+			ExprCall:     false, // statement context — return value is discarded
+			RegionOffset: regionOffset,
+			RegionSize:   regionSize,
+			bumpPtr:      bumpPtr,
 		}
 
 	case compiler.OpReturn:
@@ -528,8 +588,8 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpPtrLOAD': %w", err)
 		}
 
-		if offset < 0 || offset+size > r.allocator.Capacity() {
-			return fmt.Errorf("instr 'OpPtrLOAD': pointer out of bounds (offset=%d, size=%d, capacity=%d)", offset, size, r.allocator.Capacity())
+		if offset < 0 || offset+size > r.allocator.Size() {
+			return fmt.Errorf("instr 'OpPtrLOAD': pointer out of bounds (offset=%d, size=%d, size=%d)", offset, size, r.allocator.Size())
 		}
 
 		view := r.allocator.Slice(offset, size)
@@ -558,22 +618,51 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 				r.pendingArgs[argIdx])
 		}
 
-		offset, err := r.allocator.Alloc(size)
-		if err != nil {
-			return fmt.Errorf("instr 'OpLoadArgStencil': %w", err)
+		var offset int
+		var inRegion bool
+		currentFrame := r.IndexedFrame()
+		if currentFrame.RegionSize > 0 {
+			if currentFrame.bumpPtr+size > currentFrame.RegionOffset+currentFrame.RegionSize {
+				return fmt.Errorf("instr 'OpLoadArgStencil': frame region exhausted")
+			}
+			offset = currentFrame.bumpPtr
+			currentFrame.bumpPtr += size
+			inRegion = true
+		} else {
+			var err error
+			offset, err = r.allocator.Alloc(size)
+			if err != nil {
+				return fmt.Errorf("instr 'OpLoadArgStencil': %w", err)
+			}
 		}
 
 		for len(r.slots) <= slotID {
 			r.slots = append(r.slots, SlotEntry{})
 		}
 		r.slots[slotID] = SlotEntry{
-			Offset:  offset,
-			Size:    size,
-			Alive:   true,
-			Stencil: true,
+			Offset:   offset,
+			Capacity: size,
+			Alive:    true,
+			Stencil:  true,
+			InRegion: inRegion,
 		}
 
 		copy(r.allocator.Slice(offset, size), raw.Data)
+
+	case compiler.OpBuildSTRING:
+		n := instr.Argument
+		if r.exprStack == nil {
+			return fmt.Errorf("instr 'OpBuildSTRING': undefined stack")
+		}
+		parts := make([]string, n)
+		for i := n - 1; i >= 0; i-- {
+			v, err := r.exprStack.Pop()
+			if err != nil {
+				return fmt.Errorf("instr 'OpBuildSTRING': stack underflow")
+			}
+			parts[i] = v.String()
+		}
+		r.exprStack.Push(value.NewSlice([]byte(strings.Join(parts, ""))))
 	}
 
 	return nil
@@ -606,12 +695,19 @@ func (r *Runtime) doReturn(frame *CallFrame, hasValue bool, retVal value.Value) 
 		}
 	}
 
-	// Free all alive, non-alias slots from this function scope back to the
-	// global allocator. Alias slots are not owned by the allocator.
+	// Free slots that are NOT part of the frame region individually.
+	// Region slots are batch-freed below. Alias slots are never freed.
 	for _, slot := range r.slots {
-		if slot.Alive && !slot.Alias {
-			r.allocator.Free(slot.Offset, slot.Size)
+		if slot.Alive && !slot.Alias && !slot.InRegion {
+			r.allocator.Free(slot.Offset, slot.Capacity)
 		}
+	}
+
+	// Release the entire frame region with a single allocator call. This
+	// replaces the per-slot loop for all fixed-size locals and coalesces
+	// cleanly with adjacent free blocks in the global free list.
+	if frame.RegionSize > 0 {
+		r.allocator.Free(frame.RegionOffset, frame.RegionSize)
 	}
 
 	// Step back to the caller's frame and restore its saved state.
@@ -632,4 +728,14 @@ func (r *Runtime) doReturn(frame *CallFrame, hasValue bool, retVal value.Value) 
 
 func (r *Runtime) IndexedFrame() *CallFrame {
 	return r.Frames[r.Index]
+}
+
+// fieldSizeFor returns the byte width of a struct field.
+// For scalar fields the size is derived from the type tag; for TagSlice fields
+// the compiler encodes the declared capacity in the instruction's Size field.
+func fieldSizeFor(tag value.TypeTag, instrSize int) int {
+	if tag == value.TagSlice {
+		return instrSize
+	}
+	return value.SizeForTag(tag)
 }

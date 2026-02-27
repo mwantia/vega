@@ -374,8 +374,9 @@ var _ Statement = (*FreeStatement)(nil)
 
 // StructField represents a single field declaration inside a struct definition.
 type StructField struct {
-	Name string
-	Type string // type name (e.g. "int", "bool")
+	Name     string
+	Type     string // type name (e.g. "int", "bool", "string", "byte")
+	Capacity int    // >0 for parameterised slice fields (e.g. string<10> → Capacity=10)
 }
 
 // StructStatement represents a struct type definition: struct name { field: type, ... }

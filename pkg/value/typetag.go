@@ -11,7 +11,7 @@ const (
 	TagDecimal TypeTag = 5 // float64, 8 bytes
 	TagBoolean TypeTag = 6 // bool,    1 byte
 	TagByte    TypeTag = 7 // uint8,   1 byte
-	TagString  TypeTag = 8 // []byte,  variable length (SizeForTag returns 0)
+	TagSlice   TypeTag = 8 // []byte,  bounded capacity (SizeForTag returns 0; capacity is always external)
 )
 
 // TagFor returns the TypeTag for an Allocable value.
@@ -31,8 +31,8 @@ func TagFor(a Allocable) TypeTag {
 		return TagBoolean
 	case *ByteValue:
 		return TagByte
-	case *StringValue:
-		return TagString
+	case *SliceValue:
+		return TagSlice
 	default:
 		return 0
 	}
@@ -56,7 +56,7 @@ func TagForName(name string) (TypeTag, bool) {
 	case "byte":
 		return TagByte, true
 	case "str", "string":
-		return TagString, true
+		return TagSlice, true
 	default:
 		return 0, false
 	}
@@ -78,8 +78,8 @@ func NameForTag(tag TypeTag) (string, bool) {
 		return "boolean", true
 	case TagByte:
 		return "byte", true
-	case TagString:
-		return "string", true
+	case TagSlice:
+		return "slice", true
 	default:
 		return "", false
 	}
@@ -113,7 +113,7 @@ func MaxSizeForMask(mask byte) int {
 }
 
 // SizeForTag returns the byte size for the given TypeTag.
-// Returns 0 for variable-length types (TagString).
+// Returns 0 for TagSlice — capacity is always provided externally.
 func SizeForTag(tag TypeTag) int {
 	switch tag {
 	case TagShort:
@@ -130,8 +130,8 @@ func SizeForTag(tag TypeTag) int {
 		return 1
 	case TagByte:
 		return 1
-	case TagString:
-		return 0
+	case TagSlice:
+		return 0 // capacity is always provided externally; SizeForTag is not meaningful for slices
 	default:
 		return 0
 	}

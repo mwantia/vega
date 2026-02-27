@@ -14,8 +14,9 @@ const (
 	OpVarPTR   // create alias slot at explicit offset (arg: slot ID, extra: type tag)
 
 	OpStencilALLOC // allocate stencil-sized slot (arg: slot ID, offset: total size)
-	OpFieldSTORE   // pop expr stack, copy into field (arg: slot ID, offset: field byte offset, extra: type tag)
-	OpFieldLOAD    // load field from slot (arg: slot ID, offset: field byte offset, extra: type tag)
+	OpSliceALLOC   // allocate a bounded slice slot (arg: slot ID, offset: capacity in bytes)
+	OpFieldSTORE   // pop expr stack, copy into field (arg: slot ID, offset: field byte offset, extra: type tag, size: field size)
+	OpFieldLOAD    // load field from slot (arg: slot ID, offset: field byte offset, extra: type tag, size: field size)
 
 	OpCallNAT // call a registered native (Go) function (name: function name, arg: argument count)
 	OpCallFN  // call a user-defined (Vega) function (name: function name, arg: argument count)
@@ -25,9 +26,9 @@ const (
 	OpVarLoadRaw     // push stencil slot bytes as a RawValue (arg: slot ID, offset: total size)
 	OpLoadArgStencil // restore a stencil arg from pending args into a new slot (arg: pending index, extra: slot ID, offset: total size)
 
-	OpStrSTORE // pop StringValue, (re)alloc slot if needed, copy bytes in (arg: slot ID)
-
 	OpPtrLOAD // pop offset from expr stack, read tag-typed value from allocator, push result (extra: type tag)
+
+	OpBuildSTRING // pop N values, call String() on each, concat, push heap SliceValue (arg: N)
 )
 
 var operationNames = map[OperationCode]string{
@@ -41,6 +42,7 @@ var operationNames = map[OperationCode]string{
 	OpVarPTR:   "VAR_PTR",
 
 	OpStencilALLOC: "STENCIL_ALLOC",
+	OpSliceALLOC:   "SLICE_ALLOC",
 	OpFieldSTORE:   "FIELD_STORE",
 	OpFieldLOAD:    "FIELD_LOAD",
 
@@ -52,8 +54,9 @@ var operationNames = map[OperationCode]string{
 	OpVarLoadRaw:     "VAR_LOAD_RAW",
 	OpLoadArgStencil: "LOAD_ARG_STENCIL",
 
-	OpStrSTORE: "STR_STORE",
-	OpPtrLOAD:  "PTR_LOAD",
+	OpPtrLOAD: "PTR_LOAD",
+
+	OpBuildSTRING: "BUILD_STRING",
 }
 
 func (op OperationCode) String() string {

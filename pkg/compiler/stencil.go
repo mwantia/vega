@@ -8,9 +8,10 @@ import (
 
 // FieldLayout describes a single field within a stencil.
 type FieldLayout struct {
-	Name   string
-	Offset int           // cumulative byte offset within the stencil
-	Tag    value.TypeTag // type tag for this field
+	Name     string
+	Offset   int           // cumulative byte offset within the stencil
+	Tag      value.TypeTag // type tag for this field
+	Capacity int           // byte capacity for TagSlice fields (0 for scalar fields)
 }
 
 // Stencil is a compile-time layout recipe for packing primitive fields

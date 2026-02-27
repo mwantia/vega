@@ -244,21 +244,59 @@ func (p *Parser) makeDeclarationExpression(b lexer.TokenBuffer) (*DeclarationExp
 	b.Read() // advance past the parameter name
 
 	if b.MatchAny(true, lexer.COLON) {
-		constraint, err := p.makeExpression(b, LOWEST)
+		constraint, err := p.makeTypeAnnotation(b)
 		if err != nil {
-			return nil, fmt.Errorf("failed to make expression constraint: %v", err)
+			return nil, fmt.Errorf("failed to make type annotation: %v", err)
 		}
 		expr.Constraints = append(expr.Constraints, constraint)
 		for b.MatchAny(true, lexer.PIPE) {
-			constraint, err = p.makeExpression(b, LOWEST)
+			constraint, err = p.makeTypeAnnotation(b)
 			if err != nil {
-				return nil, fmt.Errorf("failed to make expression constraint: %v", err)
+				return nil, fmt.Errorf("failed to make type annotation: %v", err)
 			}
 			expr.Constraints = append(expr.Constraints, constraint)
 		}
 	}
 
 	return expr, nil
+}
+
+// makeTypeAnnotation parses a type annotation in constraint position.
+// It handles both plain identifiers ("int", "bool") and parameterised
+// slice types ("string<10>", "byte<64>"). The '<' is consumed only when
+// immediately followed by an integer literal and a closing '>'.
+func (p *Parser) makeTypeAnnotation(b lexer.TokenBuffer) (Expression, error) {
+	if !b.MatchAny(false, lexer.IDENT) {
+		return nil, fmt.Errorf("expected type name, but received '%s'", b.Current().Literal)
+	}
+	token := b.Current()
+	typeName := token.Literal
+	b.Read() // consume type name
+
+	if b.MatchAny(true, lexer.LT) {
+		if !b.MatchAny(false, lexer.INTEGER) {
+			return nil, fmt.Errorf("expected integer capacity after '<' in type '%s', but received '%s'", typeName, b.Current().Literal)
+		}
+		capToken := b.Current()
+		capacity, err := strconv.ParseInt(capToken.Literal, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid capacity in type '%s<%s>': %v", typeName, capToken.Literal, err)
+		}
+		if capacity <= 0 {
+			return nil, fmt.Errorf("slice capacity must be > 0, got %d for type '%s'", capacity, typeName)
+		}
+		b.Read() // consume integer
+		if !b.MatchAny(true, lexer.GT) {
+			return nil, fmt.Errorf("expected '>' to close type '%s<%d>', but received '%s'", typeName, capacity, b.Current().Literal)
+		}
+		return &SliceTypeExpression{
+			Token:    token,
+			TypeName: typeName,
+			Capacity: int(capacity),
+		}, nil
+	}
+
+	return &IdentifierExpression{Token: token, Value: typeName}, nil
 }
 
 func (p *Parser) makeBlockStatement(b lexer.TokenBuffer) (*BlockStatement, error) {
@@ -414,16 +452,21 @@ func (p *Parser) makeStructStatement(b lexer.TokenBuffer) (*StructStatement, err
 			return nil, fmt.Errorf("expected ':' after field name '%s', but received '%s'", fieldName, b.Current().Literal)
 		}
 
-		if !b.MatchAny(false, lexer.IDENT) {
-			return nil, fmt.Errorf("expected type name for field '%s', but received '%s'", fieldName, b.Current().Literal)
+		typeExpr, err := p.makeTypeAnnotation(b)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse type for field '%s': %v", fieldName, err)
 		}
-		typeName := b.Current().Literal
-		b.Read() // consume type name
 
-		statement.Fields = append(statement.Fields, StructField{
-			Name: fieldName,
-			Type: typeName,
-		})
+		var sf StructField
+		switch t := typeExpr.(type) {
+		case *IdentifierExpression:
+			sf = StructField{Name: fieldName, Type: t.Value}
+		case *SliceTypeExpression:
+			sf = StructField{Name: fieldName, Type: t.TypeName, Capacity: t.Capacity}
+		default:
+			return nil, fmt.Errorf("unexpected type expression %T for field '%s'", typeExpr, fieldName)
+		}
+		statement.Fields = append(statement.Fields, sf)
 
 		// Consume comma or newline separators
 		b.MatchAny(true, lexer.COMMA)
@@ -543,7 +586,7 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 	case lexer.CHAR:
 		ch, _ := utf8.DecodeRuneInString(token.Literal)
 		b.Read()
-		return &CharExpression{Token: token, Value: ch}, nil
+		return &IntegerExpression{Token: token, Value: int32(ch)}, nil
 	case lexer.STRING:
 		str := &StringExpression{
 			Token: token,
@@ -552,15 +595,47 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 		b.Read()
 		return str, nil
 	case lexer.INTERP_START:
-		// We keep the old token stored in 'token'
-		b.Read()
+		startToken := token
+		b.Read() // consume INTERP_START, advance to first expression token
 
-		parts := make([]Expression, 0)
-		// TODO
-		return &InterpolatedExpression{
-			Token: token,
-			Parts: parts,
-		}, nil
+		var parts []Expression
+
+		// Literal prefix (may be empty string — still valid INTERP_START)
+		if startToken.Literal != "" {
+			parts = append(parts, &StringExpression{Token: startToken, Value: startToken.Literal})
+		}
+
+		for {
+			// makeExpression stops naturally at INTERP_PART/INTERP_END because
+			// neither is a registered infix operator (precedence returns LOWEST).
+			expr, err := p.makeExpression(b, LOWEST)
+			if err != nil {
+				return nil, fmt.Errorf("interpolated string expression: %w", err)
+			}
+			if expr != nil {
+				parts = append(parts, expr)
+			}
+
+			cur := b.Current()
+			switch cur.Type {
+			case lexer.INTERP_PART:
+				if cur.Literal != "" {
+					parts = append(parts, &StringExpression{Token: cur, Value: cur.Literal})
+				}
+				b.Read() // consume INTERP_PART, advance to next expression token
+				continue
+			case lexer.INTERP_END:
+				if cur.Literal != "" {
+					parts = append(parts, &StringExpression{Token: cur, Value: cur.Literal})
+				}
+				b.Read() // consume INTERP_END
+			default:
+				return nil, fmt.Errorf("unexpected token in interpolated string: %v", cur.Type)
+			}
+			break
+		}
+
+		return &InterpolatedExpression{Token: startToken, Parts: parts}, nil
 	case lexer.TRUE, lexer.FALSE:
 		boolean := &BooleanExpression{
 			Token: token,
@@ -721,18 +796,18 @@ func (p *Parser) makeExpressionOrAssignment(b lexer.TokenBuffer) (Statement, err
 	}
 	token := b.Current()
 
-	// Check for typed assignment: ident: type|type = expr
+	// Check for typed assignment: ident: type<N>|type = expr
 	if ident, ok := expr.(*IdentifierExpression); ok && b.MatchAny(true, lexer.COLON) {
 		constraints := make([]Expression, 0)
-		constraint, err := p.makeExpression(b, LOWEST)
+		constraint, err := p.makeTypeAnnotation(b)
 		if err != nil {
-			return nil, fmt.Errorf("expected type constraint after ':': %v", err)
+			return nil, fmt.Errorf("expected type annotation after ':': %v", err)
 		}
 		constraints = append(constraints, constraint)
 		for b.MatchAny(true, lexer.PIPE) {
-			constraint, err = p.makeExpression(b, LOWEST)
+			constraint, err = p.makeTypeAnnotation(b)
 			if err != nil {
-				return nil, fmt.Errorf("expected type constraint after '|': %v", err)
+				return nil, fmt.Errorf("expected type annotation after '|': %v", err)
 			}
 			constraints = append(constraints, constraint)
 		}

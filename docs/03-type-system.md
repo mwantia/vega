@@ -15,7 +15,7 @@ Extended interfaces compose additional capabilities:
 
 ```
 Value
-├── Allocable ─── fixed-size, can live in the byte buffer
+├── Allocable ─── fixed-size (or fixed-capacity for slices), can live in the byte buffer
 │   ├── Comparable ─── comparison operations (<, >, <=, >=)
 │   └── Numeric ──── arithmetic operations (+, -, *, /, %, negation)
 ├── Methodable ─── extended method calls
@@ -28,7 +28,7 @@ Value
 
 ## Allocable Types
 
-These types have a known, fixed byte size and can be stored in the byte-array variable buffer.
+These types implement the `Allocable` interface and can be stored in the byte-array variable buffer.
 
 | Type | Go type | Size | Tag constant | Tag value |
 |------|---------|------|--------------|-----------|
@@ -39,7 +39,9 @@ These types have a known, fixed byte size and can be stored in the byte-array va
 | `decimal` | `float64` | 8 bytes | `TagDecimal` | `5` |
 | `boolean` | `bool` | 1 byte | `TagBoolean` | `6` |
 | `byte` | `uint8` | 1 byte | `TagByte` | `7` |
-| `char` | `rune` | 4 bytes | `TagChar` | `8` |
+| `slice` | `[]byte` | N bytes (capacity) | `TagSlice` | `8` |
+
+`slice` is fixed-capacity — `SizeForTag(TagSlice)` returns 0 (capacity is always external). The declared capacity N is tracked in `SlotEntry.Capacity` and set by `SLICE_ALLOC`. `string<N>` is the text form; `byte<N>` is the raw-byte form. Both use `TagSlice`. Content ends at the first `\0` byte or at capacity, whichever comes first.
 
 ### Literal Syntax
 
@@ -52,7 +54,12 @@ These types have a known, fixed byte size and can be stored in the byte-array va
 | `f` | float | `3.14f` |
 | *(none, decimal)* | decimal | `3.14` |
 | `true`/`false` | boolean | `true` |
-| `'...'` | char | `'A'` |
+| `"..."` | slice (string content) | `"hello"` — must be used with a `string<N>` or `byte<N>` constraint |
+| `'A'` | *(lowered to int)* | `65` — char literals are decoded to their Unicode codepoint as `int32` |
+
+**Note on string literals:** A bare `"..."` literal produces a `SliceValue` of type `TagSlice`. It **must** appear on the RHS of a declaration with an explicit `string<N>` (or `byte<N>`) constraint. Using a string literal without a constraint is a compile error.
+
+**Note on char literals:** There is no `char` type or `TagChar`. The lexer recognizes single-quoted character literals (`'A'`), but the parser lowers them to `IntegerExpression` with the Unicode codepoint value. `'A'` compiles identically to `65`.
 
 ---
 
@@ -62,7 +69,6 @@ These types do **not** live in the byte buffer. They exist only on the expressio
 
 | Type | Storage | Reason |
 |------|---------|--------|
-| `string` | Constants table (static VM memory) | Variable length, borrowed semantics |
 | `nil` | Singleton (`value.Nil`) | No data to encode |
 
 ---
@@ -82,14 +88,15 @@ type TypeTag byte
 | Function | Signature | Purpose |
 |----------|-----------|---------|
 | `TagFor` | `(Allocable) TypeTag` | Returns the tag for a runtime value |
-| `SizeForTag` | `(TypeTag) int` | Returns the byte size for a tag |
-| `TagForName` | `(string) (TypeTag, bool)` | Resolves a type name (`"int"`, `"bool"`, ...) to its tag |
+| `SizeForTag` | `(TypeTag) int` | Returns the byte size for a tag (0 for `TagSlice` — capacity is external) |
+| `TagForName` | `(string) (TypeTag, bool)` | Resolves a type name to its tag (`"int"`, `"bool"`, `"string"`, `"slice"`, ...) |
+| `NameForTag` | `(TypeTag) (string, bool)` | Resolves a tag to its name |
 | `MaskForTag` | `(TypeTag) byte` | Returns a bitmask with the bit for the tag set (`1 << (tag-1)`) |
 | `TagInMask` | `(TypeTag, byte) bool` | Checks whether a tag is present in a bitmask |
 | `MaxSizeForMask` | `(byte) int` | Returns the max byte size across all tags in a mask |
 | `ToInt` | `(Allocable) (int, error)` | Extracts an integer offset from byte/short/int/long values |
 
-`TagFor` uses a type switch on the concrete value type. `SizeForTag` is a pure lookup — no runtime value needed. The bitmask functions support union types: a mask like `0b00100010` represents the set `{int, bool}`.
+`TagFor` uses a type switch on the concrete value type. `SizeForTag` is a pure lookup. The bitmask functions support union types: a mask like `0b00100010` represents the set `{int, bool}`.
 
 ---
 
@@ -101,7 +108,7 @@ Values are serialized to/from `[]byte` using `encoding/binary.LittleEndian`.
 
 ### `Encode(dst []byte, a Allocable) error`
 
-Writes the value's raw bytes into `dst`. The caller must ensure `dst` is at least `SizeForTag(TagFor(a))` bytes.
+Writes the value's raw bytes into `dst`. The caller must ensure `dst` is at least `SizeForTag(TagFor(a))` bytes (or `SlotEntry.Capacity` for slices).
 
 | Type | Encoding |
 |------|----------|
@@ -112,47 +119,37 @@ Writes the value's raw bytes into `dst`. The caller must ensure `dst` is at leas
 | `decimal` | `LittleEndian.PutUint64(dst, math.Float64bits(data))` |
 | `boolean` | `dst[0] = 1` if true, `dst[0] = 0` if false |
 | `byte` | `dst[0] = data` |
-| `char` | `LittleEndian.PutUint32(dst, uint32(data))` |
+| `slice` | raw bytes copied directly into the capacity region; remainder zero-padded |
 
 ### `Decode(src []byte, tag TypeTag) (Value, error)`
 
 Reconstructs a `Value` from raw bytes and a type tag. The inverse of `Encode`.
 
-| Tag | Decoding |
-|-----|----------|
-| `TagShort` | `int16(LittleEndian.Uint16(src))` → `NewShort(...)` |
-| `TagInteger` | `int32(LittleEndian.Uint32(src))` → `NewInteger(...)` |
-| `TagLong` | `int64(LittleEndian.Uint64(src))` → `NewLong(...)` |
-| `TagFloat` | `math.Float32frombits(LittleEndian.Uint32(src))` → `NewFloat(...)` |
-| `TagDecimal` | `math.Float64frombits(LittleEndian.Uint64(src))` → `NewDecimal(...)` |
-| `TagBoolean` | `src[0] != 0` → `NewBoolean(...)` |
-| `TagByte` | `src[0]` → `NewByte(...)` |
-| `TagChar` | `rune(LittleEndian.Uint32(src))` → `NewChar(...)` |
-
 ### Round-Trip Guarantee
 
-For all allocable types: `Decode(Encode(v), TagFor(v)) == v`. This is verified by unit tests for every type including edge cases (negative values, zero, max range).
+For all fixed-size allocable types: `Decode(Encode(v), TagFor(v)) == v`. This is verified by unit tests for every type including edge cases (negative values, zero, max range).
 
 ---
 
 ## Type Inference
 
-The compiler infers the type tag from the right-hand side of an assignment:
+The compiler's `compileExpression` function returns `(value.TypeTag, error)`, giving the type tag of the compiled expression without a separate inference step. This returned tag is used directly when building slot masks for untyped assignments.
 
-| Expression type | Inferred tag |
+| Expression Node | Inferred tag |
 |-----------------|--------------|
-| `ByteExpression` | `TagByte` |
-| `ShortExpression` | `TagShort` |
-| `IntegerExpression` | `TagInteger` |
-| `LongExpression` | `TagLong` |
-| `FloatExpression` | `TagFloat` |
-| `DecimalExpression` | `TagDecimal` |
-| `BooleanExpression` | `TagBoolean` |
-| `CharExpression` | `TagChar` |
-| `PointerExpression` | Tag resolved from the pointer's type name (e.g., `*int(0)` → `TagInteger`) |
-| `IdentifierExpression` | Tag of the referenced variable (looked up in symbol table) |
+| `*parser.ByteExpression` | `TagByte` |
+| `*parser.ShortExpression` | `TagShort` |
+| `*parser.IntegerExpression` | `TagInteger` |
+| `*parser.LongExpression` | `TagLong` |
+| `*parser.FloatExpression` | `TagFloat` |
+| `*parser.DecimalExpression` | `TagDecimal` |
+| `*parser.BooleanExpression` | `TagBoolean` |
+| `*parser.StringExpression` | `TagSlice` |
+| `*parser.PointerExpression` | Tag resolved from the pointer's type name |
+| `*parser.IdentifierExpression` | Tag of the referenced variable (looked up in symbol table) |
+| `*parser.AttributeExpression` | Tag of the accessed field in the stencil |
 
-Compound expressions (arithmetic, function calls) are not yet supported for type inference. This is intentional — the initial implementation covers direct literal, variable, and pointer alias assignments only.
+`inferTypeTag` is a separate function used only from `compileTupleAssignment` — it performs the same inference but without emitting any bytecode, allowing stencil layout to be pre-computed before element expressions are compiled.
 
 ---
 
@@ -165,11 +162,9 @@ Variables are constrained by a **bitmask** established at first assignment. Each
 Untyped assignments infer the type and create a single-type mask:
 
 ```
-alloc 64 {
-    x = 42       # x mask = 00000010 (int only, 4 bytes)
-    x = 100      # OK: int is in the mask
-    x = true     # Runtime error: type mismatch
-}
+x = 42       # x mask = 00000010 (int only, 4 bytes)
+x = 100      # OK: int is in the mask
+x = true     # Runtime error: type mismatch
 ```
 
 ### Union types (explicit)
@@ -177,14 +172,12 @@ alloc 64 {
 Typed declarations build a multi-type mask. The slot allocates `max(size)` across all allowed types:
 
 ```
-alloc 64 {
-    y: int|bool = 15    # y mask = 00100010 (int + bool, 8 bytes max)
-    y = true            # OK: bool is in the mask
-    y = 3.14f           # Runtime error: float not in the mask
-}
+y: int|bool = 15    # y mask = 00100010 (int + bool, 4 bytes max)
+y = true            # OK: bool is in the mask
+y = 3.14f           # Runtime error: float not in the mask
 ```
 
-### Supported type names
+### Supported type names for constraints
 
 | Name | Tag |
 |------|-----|
@@ -195,8 +188,10 @@ alloc 64 {
 | `decimal` | `TagDecimal` |
 | `bool` | `TagBoolean` |
 | `byte` | `TagByte` |
-| `char` | `TagChar` |
+| `str` / `string` | `TagSlice` (requires `<N>` capacity parameter) |
+
+**Note:** Slice types (`string<N>`, `byte<N>`) bypass the mask system entirely (`SLICE_ALLOC` handles them separately) and cannot participate in union types. The mask for a slice slot is always 0. Attempting to use `string` or `byte` without `<N>` as a constraint in a union type is a compile error.
 
 ### How it works
 
-The compiler resolves type constraint identifiers to tags via `TagForName`, builds the mask via `MaskForTag`, and emits the mask in `OpVarALLOC.Extra`. The runtime's `OpVarSTORE` checks `TagInMask(actualTag, slot.Mask)` and rejects mismatches. `SlotEntry.Tag` is updated on every successful store to track the current variant for `OpVarLOAD` decoding.
+The compiler resolves type constraint identifiers to tags via `TagForName`, builds the mask via `MaskForTag`, and emits the mask in `VAR_ALLOC.Extra`. The runtime's `VAR_STORE` checks `TagInMask(actualTag, slot.Mask)` and rejects mismatches. `SlotEntry.Tag` is updated on every successful store to track the current variant for `VAR_LOAD` decoding.

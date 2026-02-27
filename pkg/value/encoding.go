@@ -38,8 +38,8 @@ func Wrap(tag TypeTag, view []byte) (Allocable, error) {
 		return NewDecimal(view), nil
 	case TagBoolean:
 		return NewBoolean(view), nil
-	case TagString:
-		return NewStringView(view), nil
+	case TagSlice:
+		return NewSliceView(view), nil
 	default:
 		return nil, fmt.Errorf("unknown type tag: %d", tag)
 	}

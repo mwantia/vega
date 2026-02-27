@@ -4,11 +4,11 @@ import "fmt"
 
 type Instruction struct {
 	Operation  OperationCode
-	Argument   int    // Numeric argument (index, count or offset)
-	Offset     int    // Field byte offset (for OpFieldLOAD/OpFieldSTORE)
-	Name       string // String argument (variable name or function name)
-	Extra      byte   // Extra byte (carries type tag for OpVarALLOC)
-	SourceLine int    // Source line number for error reporting
+	Argument   int  // Numeric argument (index, count or offset)
+	Offset     int  // Field byte offset (for OpFieldLOAD/OpFieldSTORE); name index for OpCallNAT/OpCallFN; capacity for OpSliceALLOC
+	Extra      byte // Extra byte (carries type tag for OpVarALLOC/OpFieldSTORE/OpFieldLOAD)
+	Size       int  // Field byte size for OpFieldSTORE/OpFieldLOAD (needed for TagSlice fields whose SizeForTag returns 0)
+	SourceLine int  // Source line number for error reporting
 }
 
 func (i *Instruction) String() string {
@@ -24,11 +24,9 @@ func (i *Instruction) String() string {
 	case OpStencilALLOC:
 		return fmt.Sprintf("%s slot=%d size=%d", i.Operation, i.Argument, i.Offset)
 	case OpFieldSTORE, OpFieldLOAD:
-		return fmt.Sprintf("%s slot=%d offset=%d tag=%d", i.Operation, i.Argument, i.Offset, i.Extra)
-	case OpCallNAT:
-		return fmt.Sprintf("%s %s argc=%d", i.Operation, i.Name, i.Argument)
-	case OpCallFN:
-		return fmt.Sprintf("%s %s argc=%d", i.Operation, i.Name, i.Argument)
+		return fmt.Sprintf("%s slot=%d offset=%d tag=%d size=%d", i.Operation, i.Argument, i.Offset, i.Extra, i.Size)
+	case OpSliceALLOC:
+		return fmt.Sprintf("%s slot=%d capacity=%d", i.Operation, i.Argument, i.Offset)
 	case OpReturn:
 		if i.Extra == 1 {
 			return fmt.Sprintf("%s value", i.Operation)
@@ -40,8 +38,8 @@ func (i *Instruction) String() string {
 		return fmt.Sprintf("%s slot=%d size=%d", i.Operation, i.Argument, i.Offset)
 	case OpLoadArgStencil:
 		return fmt.Sprintf("%s index=%d slot=%d size=%d", i.Operation, i.Argument, i.Extra, i.Offset)
-	case OpStrSTORE:
-		return fmt.Sprintf("%s slot=%d", i.Operation, i.Argument)
+	case OpBuildSTRING:
+		return fmt.Sprintf("%s count=%d", i.Operation, i.Argument)
 	}
 
 	return i.Operation.String()

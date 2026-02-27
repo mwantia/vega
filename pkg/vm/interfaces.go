@@ -22,15 +22,13 @@ type VirtualMachine interface {
 	// Run executes bytecode and returns the exit code.
 	Run(context.Context, *compiler.ByteCode) (int, error)
 
-	// StartSession enables persistent state across Run() calls (REPL mode).
-	// The allocator, slots, and user-defined functions survive between calls.
-	StartSession()
-
 	// ResetSession clears all persistent session state, returning the VM to
 	// stateless mode (each Run() call gets a fresh allocator and empty slots).
-	ResetSession()
+	ResetSession() error
 
-	// Snapshot returns a point-in-time deep copy of the VM's allocator state,
-	// or nil if no session is active.
-	Snapshot() *alloc.AllocSnapshot
+	// Snapshot returns the SnapshotManager for the active session's allocator,
+	// or nil if no session is active or the allocator does not support snapshots.
+	// The manager persists for the lifetime of the session; callers should call
+	// Take() after each Run() to record incremental deltas.
+	SnapshotManager() (*alloc.SnapshotManager, error)
 }

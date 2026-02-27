@@ -18,13 +18,11 @@ const (
 	STRING  TokenType = "STRING"
 	SLICE   TokenType = "SLICE"
 
-	// Start of interpolated string
+	// Start of interpolated string (literal prefix before first expression)
 	INTERP_START TokenType = "INTERP_START"
-	// String part of interpolation
+	// Literal segment between interpolated expressions
 	INTERP_PART TokenType = "INTERP_PART"
-	// Expression placeholder in interpolation
-	INTERP_EXPR TokenType = "INTERP_EXPR"
-	// End of interpolated string
+	// End of interpolated string (literal suffix after last expression)
 	INTERP_END TokenType = "INTERP_END"
 
 	ASSIGN   TokenType = "="

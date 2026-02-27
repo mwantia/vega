@@ -13,6 +13,7 @@ type Lexer struct {
 	current  rune
 	line     int
 	column   int
+	pending  []Token // buffered tokens from interpolated string lexing
 }
 
 func NewLexer(s string) (*Lexer, error) {
@@ -93,6 +94,13 @@ func (l *Lexer) Position() TokenPosition {
 }
 
 func (l *Lexer) Next() (Token, error) {
+	// Drain pending tokens produced by interpolated string lexing.
+	if len(l.pending) > 0 {
+		tok := l.pending[0]
+		l.pending = l.pending[1:]
+		return tok, nil
+	}
+
 	var token Token
 
 	l.SkipWhitespaceAndComments()
@@ -272,6 +280,12 @@ func (l *Lexer) Next() (Token, error) {
 			Literal:  "\n",
 			Position: pos,
 		}
+	case '$':
+		if l.PeekChar() != '"' {
+			return token, fmt.Errorf("unexpected character: '$'")
+		}
+		l.ReadChar() // consume '$', l.current is now '"'
+		return l.readInterpTokens(pos)
 	case '\'':
 		return l.readCharToken(pos)
 	case '"':
@@ -461,11 +475,9 @@ func (l *Lexer) readCharToken(pos TokenPosition) (Token, error) {
 }
 
 func (l *Lexer) ReadStringToken(pos TokenPosition) Token {
-	l.ReadChar()
+	l.ReadChar() // consume opening '"'
 
 	var result []rune
-	hasInterpolation := false
-
 	for {
 		if l.current == 0 {
 			return Token{
@@ -493,8 +505,6 @@ func (l *Lexer) ReadStringToken(pos TokenPosition) Token {
 				result = append(result, '\\')
 			case '"':
 				result = append(result, '"')
-			case '$':
-				result = append(result, '$')
 			default:
 				result = append(result, l.current)
 			}
@@ -502,20 +512,8 @@ func (l *Lexer) ReadStringToken(pos TokenPosition) Token {
 			continue
 		}
 
-		if l.current == '$' && l.PeekChar() == '{' {
-			hasInterpolation = true
-		}
-
 		result = append(result, l.current)
 		l.ReadChar()
-	}
-
-	if hasInterpolation {
-		return Token{
-			Type:     INTERP_START,
-			Literal:  string(result),
-			Position: pos,
-		}
 	}
 
 	return Token{
@@ -523,4 +521,126 @@ func (l *Lexer) ReadStringToken(pos TokenPosition) Token {
 		Literal:  string(result),
 		Position: pos,
 	}
+}
+
+// readInterpTokens lexes a $"..." interpolated string. l.current must be '"'
+// on entry. It returns the first token (INTERP_START, or STRING if no
+// expressions are present) and appends any remaining tokens to l.pending.
+func (l *Lexer) readInterpTokens(pos TokenPosition) (Token, error) {
+	l.ReadChar() // consume opening '"', now at first content char
+
+	var all []Token
+	var litBuf []rune
+	firstSegment := true
+
+	emitLiteral := func(tokType TokenType) {
+		all = append(all, Token{
+			Type:     tokType,
+			Literal:  string(litBuf),
+			Position: pos,
+		})
+		litBuf = litBuf[:0]
+	}
+
+	for {
+		if l.current == 0 {
+			return Token{}, fmt.Errorf("unterminated interpolated string")
+		}
+
+		if l.current == '"' {
+			l.ReadChar() // consume closing '"'
+			break
+		}
+
+		// Escaped braces: {{ → { and }} → }
+		if l.current == '{' && l.PeekChar() == '{' {
+			l.ReadChar() // consume first '{'
+			l.ReadChar() // consume second '{'
+			litBuf = append(litBuf, '{')
+			continue
+		}
+		if l.current == '}' && l.PeekChar() == '}' {
+			l.ReadChar() // consume first '}'
+			l.ReadChar() // consume second '}'
+			litBuf = append(litBuf, '}')
+			continue
+		}
+
+		// Start of an interpolation expression: {expr}
+		if l.current == '{' {
+			if firstSegment {
+				emitLiteral(INTERP_START)
+				firstSegment = false
+			} else {
+				emitLiteral(INTERP_PART)
+			}
+			l.ReadChar() // consume '{'
+
+			// Lex expression tokens until the matching closing '}'.
+			depth := 1
+			for depth > 0 {
+				tok, err := l.Next()
+				if err != nil {
+					return Token{}, fmt.Errorf("interpolated string expression: %w", err)
+				}
+				if tok.Type == EOF {
+					return Token{}, fmt.Errorf("unterminated interpolated string: unexpected EOF in expression")
+				}
+				if tok.Type == LBRACE {
+					depth++
+					all = append(all, tok)
+				} else if tok.Type == RBRACE {
+					depth--
+					if depth > 0 {
+						all = append(all, tok)
+					}
+					// depth==0: closing brace consumed, do not add to tokens
+				} else {
+					all = append(all, tok)
+				}
+			}
+			continue
+		}
+
+		// Standard escape sequences inside the literal segments.
+		if l.current == '\\' {
+			l.ReadChar()
+			switch l.current {
+			case 'n':
+				litBuf = append(litBuf, '\n')
+			case 't':
+				litBuf = append(litBuf, '\t')
+			case 'r':
+				litBuf = append(litBuf, '\r')
+			case '\\':
+				litBuf = append(litBuf, '\\')
+			case '"':
+				litBuf = append(litBuf, '"')
+			default:
+				litBuf = append(litBuf, l.current)
+			}
+			l.ReadChar()
+			continue
+		}
+
+		litBuf = append(litBuf, l.current)
+		l.ReadChar()
+	}
+
+	// No interpolation expressions — emit as a plain STRING (zero overhead).
+	if firstSegment {
+		return Token{
+			Type:     STRING,
+			Literal:  string(litBuf),
+			Position: pos,
+		}, nil
+	}
+
+	// Append final literal segment as INTERP_END (may have empty literal).
+	emitLiteral(INTERP_END)
+
+	// Return the first token (INTERP_START); buffer the rest.
+	first := all[0]
+	l.pending = append(l.pending, all[1:]...)
+	return first, nil
 }

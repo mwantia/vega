@@ -18,6 +18,7 @@ type Constant struct {
 type ByteCode struct {
 	Instructions []Instruction
 	Constants    []Constant
+	Names        []string             // interned function names for OpCallNAT/OpCallFN
 	LoopStack    []LoopStack
 	Functions    map[string]*FunctionDef // user-defined functions compiled from this program
 }
@@ -43,7 +44,11 @@ func (b *ByteCode) Disassemble() string {
 	if len(b.Instructions) > 0 {
 		sb.WriteString("\n=== Instructions ===\n")
 		for i, n := range b.Instructions {
-			fmt.Fprintf(&sb, "%4d: %s\n", i, n.String())
+			if n.Operation == OpCallNAT || n.Operation == OpCallFN {
+				fmt.Fprintf(&sb, "%4d: %s %s argc=%d\n", i, n.Operation, b.Names[n.Offset], n.Argument)
+			} else {
+				fmt.Fprintf(&sb, "%4d: %s\n", i, n.String())
+			}
 		}
 	}
 
@@ -63,7 +68,11 @@ func (b *ByteCode) Disassemble() string {
 		if len(fn.ByteCode.Instructions) > 0 {
 			sb.WriteString("=== Instructions ===\n")
 			for i, n := range fn.ByteCode.Instructions {
-				fmt.Fprintf(&sb, "%4d: %s\n", i, n.String())
+				if n.Operation == OpCallNAT || n.Operation == OpCallFN {
+					fmt.Fprintf(&sb, "%4d: %s %s argc=%d\n", i, n.Operation, fn.ByteCode.Names[n.Offset], n.Argument)
+				} else {
+					fmt.Fprintf(&sb, "%4d: %s\n", i, n.String())
+				}
 			}
 		}
 	}
@@ -85,16 +94,6 @@ func (b *ByteCode) EmitArg(operation OperationCode, arg int, sourceLine int) int
 	b.Instructions = append(b.Instructions, Instruction{
 		Operation:  operation,
 		Argument:   arg,
-		SourceLine: sourceLine,
-	})
-	return addr
-}
-
-func (b *ByteCode) EmitName(operation OperationCode, name string, sourceLine int) int {
-	addr := len(b.Instructions)
-	b.Instructions = append(b.Instructions, Instruction{
-		Operation:  operation,
-		Name:       name,
 		SourceLine: sourceLine,
 	})
 	return addr
@@ -123,11 +122,40 @@ func (b *ByteCode) EmitField(operation OperationCode, arg int, offset int, extra
 	return addr
 }
 
+// EmitFieldSize is like EmitField but also sets Size — used for slice fields
+// in OpFieldSTORE/OpFieldLOAD where the field width is the slice capacity, not
+// derivable from SizeForTag.
+func (b *ByteCode) EmitFieldSize(operation OperationCode, arg int, offset int, extra byte, size int, sourceLine int) int {
+	addr := len(b.Instructions)
+	b.Instructions = append(b.Instructions, Instruction{
+		Operation:  operation,
+		Argument:   arg,
+		Offset:     offset,
+		Extra:      extra,
+		Size:       size,
+		SourceLine: sourceLine,
+	})
+	return addr
+}
+
+// internName appends name to the Names table if not already present and
+// returns its index. Used by EmitNameArg to store call target names.
+func (b *ByteCode) internName(name string) int {
+	for i, n := range b.Names {
+		if n == name {
+			return i
+		}
+	}
+	idx := len(b.Names)
+	b.Names = append(b.Names, name)
+	return idx
+}
+
 func (b *ByteCode) EmitNameArg(operation OperationCode, name string, arg int, sourceLine int) int {
 	addr := len(b.Instructions)
 	b.Instructions = append(b.Instructions, Instruction{
 		Operation:  operation,
-		Name:       name,
+		Offset:     b.internName(name),
 		Argument:   arg,
 		SourceLine: sourceLine,
 	})

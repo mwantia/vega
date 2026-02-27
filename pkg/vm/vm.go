@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"sync"
 
 	"github.com/mwantia/vega/pkg/alloc"
@@ -15,22 +16,20 @@ import (
 
 const (
 	MaxFrames = 256
-
-	// DefaultAllocSize is the capacity of the global allocator in bytes (1 MiB).
-	DefaultAllocSize = 1024 * 1024
 )
 
-// vmSession holds state that persists across Run() calls in REPL mode.
-type vmSession struct {
-	allocator *alloc.Allocator
+// Session holds state that persists across Run() calls in REPL mode.
+type Session struct {
+	allocator alloc.Allocator
 	slots     []SlotEntry
 	funcs     map[string]*compiler.FunctionDef
+	snapshots *alloc.SnapshotManager // nil when allocator does not implement SnapshotTarget
 }
 
 type VM struct {
 	mu      sync.RWMutex
 	fs      vfs.VirtualFileSystem
-	session *vmSession
+	session *Session
 
 	stdin  io.Reader
 	stdout io.Writer
@@ -40,8 +39,20 @@ type VM struct {
 var _ VirtualMachine = (*VM)(nil)
 
 func NewVM(fs vfs.VirtualFileSystem) VirtualMachine {
+	allocator := alloc.NewFreeListAllocator(0)
+	var snapshots *alloc.SnapshotManager
+	if target, ok := allocator.(alloc.Snapshottable); ok {
+		snapshots, _ = alloc.NewSnapshotManager(target)
+	}
+
 	return &VM{
 		fs: fs,
+		session: &Session{
+			allocator: allocator,
+			snapshots: snapshots,
+			slots:     make([]SlotEntry, 0),
+			funcs:     make(map[string]*compiler.FunctionDef),
+		},
 
 		stdin:  bytes.NewBuffer(nil),
 		stdout: io.Discard,
@@ -64,31 +75,28 @@ func NewEphemeralVM() (VirtualMachine, error) {
 		return nil, err
 	}
 
-	return &VM{
-		fs: fs,
-
-		stdin:  bytes.NewBuffer(nil),
-		stdout: io.Discard,
-		stderr: io.Discard,
-	}, nil
-}
-
-// StartSession implements VirtualMachine.
-func (v *VM) StartSession() {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.session = &vmSession{
-		allocator: alloc.NewAllocator(DefaultAllocSize),
-		slots:     make([]SlotEntry, 0),
-		funcs:     make(map[string]*compiler.FunctionDef),
-	}
+	return NewVM(fs), nil
 }
 
 // ResetSession implements VirtualMachine.
-func (v *VM) ResetSession() {
+func (v *VM) ResetSession() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	v.session = nil
+
+	allocator := alloc.NewFreeListAllocator(0)
+	var snapshots *alloc.SnapshotManager
+	if target, ok := allocator.(alloc.Snapshottable); ok {
+		snapshots, _ = alloc.NewSnapshotManager(target)
+	}
+
+	v.session = &Session{
+		allocator: allocator,
+		snapshots: snapshots,
+		slots:     make([]SlotEntry, 0),
+		funcs:     make(map[string]*compiler.FunctionDef),
+	}
+
+	return nil
 }
 
 // Run implements VirtualMachine.
@@ -96,29 +104,19 @@ func (v *VM) Run(ctx context.Context, bytecode *compiler.ByteCode) (int, error) 
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	var a *alloc.Allocator
-	var s []SlotEntry
-
-	if v.session != nil {
-		// Inject previously defined functions so this bytecode can call them.
-		for name, fn := range v.session.funcs {
-			if _, exists := bytecode.Functions[name]; !exists {
-				bytecode.Functions[name] = fn
-			}
+	// Inject previously defined functions so this bytecode can call them.
+	for name, fn := range v.session.funcs {
+		if _, exists := bytecode.Functions[name]; !exists {
+			bytecode.Functions[name] = fn
 		}
-		a = v.session.allocator
-		s = v.session.slots
-	} else {
-		a = alloc.NewAllocator(DefaultAllocSize)
-		s = make([]SlotEntry, 0)
 	}
 
 	runtime := &Runtime{
 		Frames:    make([]*CallFrame, MaxFrames),
 		Index:     0,
 		exprStack: &ExprStack{},
-		allocator: a,
-		slots:     s,
+		allocator: v.session.allocator,
+		slots:     v.session.slots,
 		native: &Native{
 			Stdin:  v.stdin,
 			Stdout: v.stdout,
@@ -135,26 +133,23 @@ func (v *VM) Run(ctx context.Context, bytecode *compiler.ByteCode) (int, error) 
 		return 1, fmt.Errorf("runtime execution failed: %w", err)
 	}
 
-	if v.session != nil {
-		// Persist updated slots and any newly defined functions.
-		v.session.slots = runtime.slots
-		for name, fn := range bytecode.Functions {
-			v.session.funcs[name] = fn
-		}
-	}
+	// Persist updated slots and any newly defined functions.
+	v.session.slots = runtime.slots
+	maps.Copy(v.session.funcs, bytecode.Functions)
 
 	return 0, nil
 }
 
 // Snapshot implements VirtualMachine.
-func (v *VM) Snapshot() *alloc.AllocSnapshot {
+func (v *VM) SnapshotManager() (*alloc.SnapshotManager, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
+
 	if v.session == nil {
-		return nil
+		return nil, fmt.Errorf("no active session exists")
 	}
-	snap := v.session.allocator.Snapshot()
-	return &snap
+
+	return v.session.snapshots, nil
 }
 
 // Stdin implements VirtualMachine.
