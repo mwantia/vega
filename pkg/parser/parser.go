@@ -65,7 +65,7 @@ func (p *Parser) makeStatement(b lexer.TokenBuffer) (Statement, error) {
 
 func (p *Parser) makeIfStatement(b lexer.TokenBuffer) (*IfStatement, error) {
 	statement := &IfStatement{
-		Token: b.Current(),
+		BaseStatement: BaseStatement{b.Current()},
 	}
 	// Consume 'if' token
 	b.Read()
@@ -101,7 +101,7 @@ func (p *Parser) makeIfStatement(b lexer.TokenBuffer) (*IfStatement, error) {
 
 func (p *Parser) makeForStatement(b lexer.TokenBuffer) (*ForStatement, error) {
 	statement := &ForStatement{
-		Token: b.Current(),
+		BaseStatement: BaseStatement{b.Current()},
 	}
 	b.Peek()
 
@@ -111,8 +111,8 @@ func (p *Parser) makeForStatement(b lexer.TokenBuffer) (*ForStatement, error) {
 
 	token := b.Current()
 	statement.Variable = &IdentifierExpression{
-		Token: token,
-		Value: token.Literal,
+		BaseExpression: BaseExpression{token},
+		Value:          token.Literal,
 	}
 	b.Read()
 
@@ -142,7 +142,7 @@ func (p *Parser) makeForStatement(b lexer.TokenBuffer) (*ForStatement, error) {
 
 func (p *Parser) makeWhileStatement(b lexer.TokenBuffer) (*WhileStatement, error) {
 	statement := &WhileStatement{
-		Token: b.Current(),
+		BaseStatement: BaseStatement{b.Current()},
 	}
 	b.Read()
 
@@ -167,7 +167,7 @@ func (p *Parser) makeWhileStatement(b lexer.TokenBuffer) (*WhileStatement, error
 
 func (p *Parser) makeFunctionStatement(b lexer.TokenBuffer) (*FunctionStatement, error) {
 	statement := &FunctionStatement{
-		Token: b.Current(),
+		BaseStatement: BaseStatement{b.Current()},
 	}
 	b.Read()
 
@@ -177,8 +177,8 @@ func (p *Parser) makeFunctionStatement(b lexer.TokenBuffer) (*FunctionStatement,
 
 	token := b.Current()
 	statement.Name = &IdentifierExpression{
-		Token: token,
-		Value: b.Current().Literal,
+		BaseExpression: BaseExpression{token},
+		Value:          b.Current().Literal,
 	}
 	b.Read()
 
@@ -237,9 +237,9 @@ func (p *Parser) makeParameterList(b lexer.TokenBuffer) ([]*DeclarationExpressio
 func (p *Parser) makeDeclarationExpression(b lexer.TokenBuffer) (*DeclarationExpression, error) {
 	token := b.Current()
 	expr := &DeclarationExpression{
-		Token:       token,
-		Value:       token.Literal,
-		Constraints: make([]Expression, 0),
+		BaseExpression: BaseExpression{token},
+		Value:          token.Literal,
+		Constraints:    make([]Expression, 0),
 	}
 	b.Read() // advance past the parameter name
 
@@ -261,10 +261,6 @@ func (p *Parser) makeDeclarationExpression(b lexer.TokenBuffer) (*DeclarationExp
 	return expr, nil
 }
 
-// makeTypeAnnotation parses a type annotation in constraint position.
-// It handles both plain identifiers ("int", "bool") and parameterised
-// slice types ("string<10>", "byte<64>"). The '<' is consumed only when
-// immediately followed by an integer literal and a closing '>'.
 func (p *Parser) makeTypeAnnotation(b lexer.TokenBuffer) (Expression, error) {
 	if !b.MatchAny(false, lexer.IDENT) {
 		return nil, fmt.Errorf("expected type name, but received '%s'", b.Current().Literal)
@@ -290,19 +286,19 @@ func (p *Parser) makeTypeAnnotation(b lexer.TokenBuffer) (Expression, error) {
 			return nil, fmt.Errorf("expected '>' to close type '%s<%d>', but received '%s'", typeName, capacity, b.Current().Literal)
 		}
 		return &SliceTypeExpression{
-			Token:    token,
-			TypeName: typeName,
-			Capacity: int(capacity),
+			BaseExpression: BaseExpression{token},
+			TypeName:       typeName,
+			Capacity:       int(capacity),
 		}, nil
 	}
 
-	return &IdentifierExpression{Token: token, Value: typeName}, nil
+	return &IdentifierExpression{BaseExpression: BaseExpression{token}, Value: typeName}, nil
 }
 
 func (p *Parser) makeBlockStatement(b lexer.TokenBuffer) (*BlockStatement, error) {
 	block := &BlockStatement{
-		Token:      b.Current(),
-		Statements: make([]Statement, 0),
+		BaseStatement: BaseStatement{b.Current()},
+		Statements:    make([]Statement, 0),
 	}
 
 	b.SkipAny(lexer.NEWLINE)
@@ -322,7 +318,7 @@ func (p *Parser) makeBlockStatement(b lexer.TokenBuffer) (*BlockStatement, error
 
 func (p *Parser) makeReturnStatement(b lexer.TokenBuffer) (*ReturnStatement, error) {
 	statement := &ReturnStatement{
-		Token: b.Current(),
+		BaseStatement: BaseStatement{b.Current()},
 	}
 	b.Read()
 	// Optional return value
@@ -339,7 +335,7 @@ func (p *Parser) makeReturnStatement(b lexer.TokenBuffer) (*ReturnStatement, err
 
 func (p *Parser) makeBreakStatement(b lexer.TokenBuffer) (*BreakStatement, error) {
 	statement := &BreakStatement{
-		Token: b.Current(),
+		BaseStatement: BaseStatement{b.Current()},
 	}
 	b.Read()
 	b.MatchAny(true, lexer.NEWLINE, lexer.SEMICOLON)
@@ -348,7 +344,7 @@ func (p *Parser) makeBreakStatement(b lexer.TokenBuffer) (*BreakStatement, error
 
 func (p *Parser) makeContinueStatement(b lexer.TokenBuffer) (*ContinueStatement, error) {
 	statement := &ContinueStatement{
-		Token: b.Current(),
+		BaseStatement: BaseStatement{b.Current()},
 	}
 	b.Read()
 	b.MatchAny(true, lexer.NEWLINE, lexer.SEMICOLON)
@@ -357,7 +353,7 @@ func (p *Parser) makeContinueStatement(b lexer.TokenBuffer) (*ContinueStatement,
 
 func (p *Parser) makeFreeStatement(b lexer.TokenBuffer) (*FreeStatement, error) {
 	statement := &FreeStatement{
-		Token: b.Current(),
+		BaseStatement: BaseStatement{b.Current()},
 	}
 	b.Read() // consume 'free'
 
@@ -371,8 +367,8 @@ func (p *Parser) makeFreeStatement(b lexer.TokenBuffer) (*FreeStatement, error) 
 
 	token := b.Current()
 	statement.Name = &IdentifierExpression{
-		Token: token,
-		Value: token.Literal,
+		BaseExpression: BaseExpression{token},
+		Value:          token.Literal,
 	}
 	b.Read() // consume identifier
 
@@ -386,10 +382,10 @@ func (p *Parser) makeFreeStatement(b lexer.TokenBuffer) (*FreeStatement, error) 
 
 func (p *Parser) makeStructExpression(b lexer.TokenBuffer, token lexer.Token, name string) (*StructExpression, error) {
 	expr := &StructExpression{
-		Token:  token,
-		Name:   name,
-		Fields: make(map[string]Expression),
-		Order:  make([]string, 0),
+		BaseExpression: BaseExpression{token},
+		Name:           name,
+		Fields:         make(map[string]Expression),
+		Order:          make([]string, 0),
 	}
 
 	b.SkipAny(lexer.NEWLINE)
@@ -426,7 +422,7 @@ func (p *Parser) makeStructExpression(b lexer.TokenBuffer, token lexer.Token, na
 
 func (p *Parser) makeStructStatement(b lexer.TokenBuffer) (*StructStatement, error) {
 	statement := &StructStatement{
-		Token: b.Current(),
+		BaseStatement: BaseStatement{b.Current()},
 	}
 	b.Read() // consume 'struct'
 
@@ -488,16 +484,16 @@ func (p *Parser) makeArgumentList(b lexer.TokenBuffer) ([]Expression, error) {
 		return args, nil
 	}
 
-	arg, err := p.makeExpression(b, LOWEST)
+	arg, err := p.makeCallArgument(b)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse argument: %v", err)
+		return nil, err
 	}
 	args = append(args, arg)
 
 	for b.MatchAny(true, lexer.COMMA) {
-		arg, err = p.makeExpression(b, LOWEST)
+		arg, err = p.makeCallArgument(b)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse argument: %v", err)
+			return nil, err
 		}
 		args = append(args, arg)
 	}
@@ -507,6 +503,24 @@ func (p *Parser) makeArgumentList(b lexer.TokenBuffer) ([]Expression, error) {
 	}
 
 	return args, nil
+}
+
+// makeCallArgument parses one argument expression. If the expression is a bare
+// identifier immediately followed by ':', it is treated as a named argument and
+// wrapped in a NamedArgumentExpression.
+func (p *Parser) makeCallArgument(b lexer.TokenBuffer) (Expression, error) {
+	expr, err := p.makeExpression(b, LOWEST)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse argument: %v", err)
+	}
+	if ident, ok := expr.(*IdentifierExpression); ok && b.MatchAny(true, lexer.COLON) {
+		val, err := p.makeExpression(b, LOWEST)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse value for named argument '%s': %v", ident.Value, err)
+		}
+		return &NamedArgumentExpression{BaseExpression: BaseExpression{ident.Token}, Name: ident.Value, Value: val}, nil
+	}
+	return expr, nil
 }
 
 func (p *Parser) makeExpression(b lexer.TokenBuffer, precedence int) (Expression, error) {
@@ -530,8 +544,8 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 	switch token.Type {
 	case lexer.IDENT:
 		identifier := &IdentifierExpression{
-			Token: token,
-			Value: token.Literal,
+			BaseExpression: BaseExpression{token},
+			Value:          token.Literal,
 		}
 		b.Read()
 
@@ -547,50 +561,50 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 			return nil, fmt.Errorf("failed to parse byte: %v", err)
 		}
 		b.Read()
-		return &ByteExpression{Token: token, Value: byte(v)}, nil
+		return &ByteExpression{BaseExpression: BaseExpression{token}, Value: byte(v)}, nil
 	case lexer.SHORT:
 		v, err := strconv.ParseInt(token.Literal, 10, 16)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse short: %v", err)
 		}
 		b.Read()
-		return &ShortExpression{Token: token, Value: int16(v)}, nil
+		return &ShortExpression{BaseExpression: BaseExpression{token}, Value: int16(v)}, nil
 	case lexer.INTEGER:
 		v, err := strconv.ParseInt(token.Literal, 10, 32)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse integer: %v", err)
 		}
 		b.Read()
-		return &IntegerExpression{Token: token, Value: int32(v)}, nil
+		return &IntegerExpression{BaseExpression: BaseExpression{token}, Value: int32(v)}, nil
 	case lexer.LONG:
 		v, err := strconv.ParseInt(token.Literal, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse long: %v", err)
 		}
 		b.Read()
-		return &LongExpression{Token: token, Value: v}, nil
+		return &LongExpression{BaseExpression: BaseExpression{token}, Value: v}, nil
 	case lexer.FLOAT:
 		v, err := strconv.ParseFloat(token.Literal, 32)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse float: %v", err)
 		}
 		b.Read()
-		return &FloatExpression{Token: token, Value: float32(v)}, nil
+		return &FloatExpression{BaseExpression: BaseExpression{token}, Value: float32(v)}, nil
 	case lexer.DECIMAL:
 		v, err := strconv.ParseFloat(token.Literal, 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse decimal: %v", err)
 		}
 		b.Read()
-		return &DecimalExpression{Token: token, Value: v}, nil
+		return &DecimalExpression{BaseExpression: BaseExpression{token}, Value: v}, nil
 	case lexer.CHAR:
 		ch, _ := utf8.DecodeRuneInString(token.Literal)
 		b.Read()
-		return &IntegerExpression{Token: token, Value: int32(ch)}, nil
+		return &IntegerExpression{BaseExpression: BaseExpression{token}, Value: int32(ch)}, nil
 	case lexer.STRING:
 		str := &StringExpression{
-			Token: token,
-			Value: token.Literal,
+			BaseExpression: BaseExpression{token},
+			Value:          token.Literal,
 		}
 		b.Read()
 		return str, nil
@@ -602,7 +616,7 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 
 		// Literal prefix (may be empty string — still valid INTERP_START)
 		if startToken.Literal != "" {
-			parts = append(parts, &StringExpression{Token: startToken, Value: startToken.Literal})
+			parts = append(parts, &StringExpression{BaseExpression: BaseExpression{startToken}, Value: startToken.Literal})
 		}
 
 		for {
@@ -620,13 +634,13 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 			switch cur.Type {
 			case lexer.INTERP_PART:
 				if cur.Literal != "" {
-					parts = append(parts, &StringExpression{Token: cur, Value: cur.Literal})
+					parts = append(parts, &StringExpression{BaseExpression: BaseExpression{cur}, Value: cur.Literal})
 				}
 				b.Read() // consume INTERP_PART, advance to next expression token
 				continue
 			case lexer.INTERP_END:
 				if cur.Literal != "" {
-					parts = append(parts, &StringExpression{Token: cur, Value: cur.Literal})
+					parts = append(parts, &StringExpression{BaseExpression: BaseExpression{cur}, Value: cur.Literal})
 				}
 				b.Read() // consume INTERP_END
 			default:
@@ -635,17 +649,17 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 			break
 		}
 
-		return &InterpolatedExpression{Token: startToken, Parts: parts}, nil
+		return &InterpolatedExpression{BaseExpression: BaseExpression{startToken}, Parts: parts}, nil
 	case lexer.TRUE, lexer.FALSE:
 		boolean := &BooleanExpression{
-			Token: token,
-			Value: token.Type == lexer.TRUE,
+			BaseExpression: BaseExpression{token},
+			Value:          token.Type == lexer.TRUE,
 		}
 		b.Read()
 		return boolean, nil
 	case lexer.NIL:
 		n := &NilExpression{
-			Token: token,
+			BaseExpression: BaseExpression{token},
 		}
 		b.Read()
 		return n, nil
@@ -667,14 +681,14 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 			return nil, fmt.Errorf("expected ')' after pointer offset, but received '%s'", b.Current().Literal)
 		}
 		return &PointerExpression{
-			Token:    token,
-			TypeName: typeName,
-			Offset:   offset,
+			BaseExpression: BaseExpression{token},
+			TypeName:       typeName,
+			Offset:         offset,
 		}, nil
 	case lexer.MINUS, lexer.BANG:
 		prefix := &PrefixExpression{
-			Token:    token,
-			Operator: token.Literal,
+			BaseExpression: BaseExpression{token},
+			Operator:       token.Literal,
 		}
 		b.Read()
 		right, err := p.makeExpression(b, UNARY)
@@ -711,8 +725,8 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 				return nil, fmt.Errorf("expected ')' to close tuple, but received '%s'", b.Current().Literal)
 			}
 			return &TupleExpression{
-				Token:    token,
-				Elements: elements,
+				BaseExpression: BaseExpression{token},
+				Elements:       elements,
 			}, nil
 		}
 
@@ -721,12 +735,12 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 		}
 
 		return &GroupedExpression{
-			Token: token,
-			Expr:  expr,
+			BaseExpression: BaseExpression{token},
+			Expr:           expr,
 		}, nil
 	case lexer.LBRACKET:
 		arr := &ArrayExpression{
-			Token: token,
+			BaseExpression: BaseExpression{token},
 		}
 		b.Read()
 		arr.Elements = nil // TODO
@@ -749,9 +763,9 @@ func (p *Parser) makeInfixExpression(b lexer.TokenBuffer, left Expression) (Expr
 			return nil, fmt.Errorf("failed to parse call arguments: %v", err)
 		}
 		return &CallExpression{
-			Token:     token,
-			Function:  left,
-			Arguments: args,
+			BaseExpression: BaseExpression{token},
+			Function:       left,
+			Arguments:      args,
 		}, nil
 	case lexer.DOT:
 		b.Read() // consume '.'
@@ -760,8 +774,8 @@ func (p *Parser) makeInfixExpression(b lexer.TokenBuffer, left Expression) (Expr
 		}
 		attrToken := b.Current()
 		attr := &IdentifierExpression{
-			Token: attrToken,
-			Value: attrToken.Literal,
+			BaseExpression: BaseExpression{attrToken},
+			Value:          attrToken.Literal,
 		}
 		b.Read() // consume attribute name
 
@@ -772,17 +786,17 @@ func (p *Parser) makeInfixExpression(b lexer.TokenBuffer, left Expression) (Expr
 				return nil, fmt.Errorf("failed to parse method arguments: %v", err)
 			}
 			return &MethodCallExpression{
-				Token:     token,
-				Object:    left,
-				Method:    attr,
-				Arguments: args,
+				BaseExpression: BaseExpression{token},
+				Object:         left,
+				Method:         attr,
+				Arguments:      args,
 			}, nil
 		}
 
 		return &AttributeExpression{
-			Token:     token,
-			Object:    left,
-			Attribute: attr,
+			BaseExpression: BaseExpression{token},
+			Object:         left,
+			Attribute:      attr,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unexpected infix operator '%s'", token.Literal)
@@ -823,10 +837,10 @@ func (p *Parser) makeExpressionOrAssignment(b lexer.TokenBuffer) (Statement, err
 
 		b.MatchAny(true, lexer.NEWLINE, lexer.SEMICOLON)
 		return &AssignmentStatement{
-			Token:       token,
-			Name:        ident,
-			Constraints: constraints,
-			Value:       value,
+			BaseStatement: BaseStatement{token},
+			Name:          ident,
+			Constraints:   constraints,
+			Value:         value,
 		}, nil
 	}
 
@@ -841,8 +855,8 @@ func (p *Parser) makeExpressionOrAssignment(b lexer.TokenBuffer) (Statement, err
 		if ident, ok := expr.(*IdentifierExpression); ok && ident.Value == "_" {
 			b.MatchAny(true, lexer.NEWLINE, lexer.SEMICOLON)
 			return &DiscardStatement{
-				Token: token,
-				Value: value,
+				BaseStatement: BaseStatement{token},
+				Value:         value,
 			}, nil
 		}
 
@@ -850,16 +864,16 @@ func (p *Parser) makeExpressionOrAssignment(b lexer.TokenBuffer) (Statement, err
 		case *IdentifierExpression:
 			b.MatchAny(true, lexer.NEWLINE, lexer.SEMICOLON)
 			return &AssignmentStatement{
-				Token: token,
-				Name:  left,
-				Value: value,
+				BaseStatement: BaseStatement{token},
+				Name:          left,
+				Value:         value,
 			}, nil
 		case *IndexExpression:
 			b.MatchAny(true, lexer.NEWLINE, lexer.SEMICOLON)
 			return &IndexAssignmentStatement{
-				Token: token,
-				Left:  left,
-				Value: value,
+				BaseStatement: BaseStatement{token},
+				Left:          left,
+				Value:         value,
 			}, nil
 		}
 		return nil, fmt.Errorf("invalid assignment target defined")
@@ -869,9 +883,18 @@ func (p *Parser) makeExpressionOrAssignment(b lexer.TokenBuffer) (Statement, err
 	if call, ok := expr.(*CallExpression); ok {
 		b.MatchAny(true, lexer.NEWLINE, lexer.SEMICOLON)
 		return &CallStatement{
-			Token:     call.Token,
-			Function:  call.Function,
-			Arguments: call.Arguments,
+			BaseStatement: BaseStatement{call.Token},
+			Function:      call.Function,
+			Arguments:     call.Arguments,
+		}, nil
+	}
+
+	// Method call expression used as a statement: obj.method(args)
+	if call, ok := expr.(*MethodCallExpression); ok {
+		b.MatchAny(true, lexer.NEWLINE, lexer.SEMICOLON)
+		return &CallStatement{
+			BaseStatement: BaseStatement{call.Token},
+			Function:      call,
 		}, nil
 	}
 

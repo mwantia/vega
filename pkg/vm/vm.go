@@ -22,7 +22,7 @@ const (
 type Session struct {
 	allocator alloc.Allocator
 	slots     []SlotEntry
-	funcs     map[string]*compiler.FunctionDef
+	funcs     map[string]*compiler.FunctionDefinition
 	snapshots *alloc.SnapshotManager // nil when allocator does not implement SnapshotTarget
 }
 
@@ -51,7 +51,7 @@ func NewVM(fs vfs.VirtualFileSystem) VirtualMachine {
 			allocator: allocator,
 			snapshots: snapshots,
 			slots:     make([]SlotEntry, 0),
-			funcs:     make(map[string]*compiler.FunctionDef),
+			funcs:     make(map[string]*compiler.FunctionDefinition),
 		},
 
 		stdin:  bytes.NewBuffer(nil),
@@ -93,7 +93,7 @@ func (v *VM) ResetSession() error {
 		allocator: allocator,
 		snapshots: snapshots,
 		slots:     make([]SlotEntry, 0),
-		funcs:     make(map[string]*compiler.FunctionDef),
+		funcs:     make(map[string]*compiler.FunctionDefinition),
 	}
 
 	return nil
@@ -117,11 +117,12 @@ func (v *VM) Run(ctx context.Context, bytecode *compiler.ByteCode) (int, error) 
 		exprStack: &ExprStack{},
 		allocator: v.session.allocator,
 		slots:     v.session.slots,
-		native: &Native{
-			Stdin:  v.stdin,
-			Stdout: v.stdout,
-			Stderr: v.stderr,
-			FS:     v.fs,
+		session: &RuntimeSession{
+			stdin:  v.stdin,
+			stdout: v.stdout,
+			stderr: v.stderr,
+			ctx:    ctx,
+			vfs:    v.fs,
 		},
 		userFuncs: bytecode.Functions,
 	}

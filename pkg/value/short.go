@@ -5,36 +5,36 @@ import (
 	"strconv"
 )
 
-// ShortValue wraps int16. Size = 2 bytes.
+// Short wraps int16. Size = 2 bytes.
 // The view slice points into the alloc buffer — no data is owned.
-type ShortValue struct {
+type Short struct {
 	view []byte
 }
 
-func NewShort(view []byte) *ShortValue {
-	return &ShortValue{
+func NewShort(view []byte) *Short {
+	return &Short{
 		view: view,
 	}
 }
 
-func (v *ShortValue) Type() string {
+func (v *Short) Type() string {
 	return "short"
 }
 
-func (v *ShortValue) String() string {
+func (v *Short) String() string {
 	return strconv.FormatInt(int64(v.Data()), 10)
 }
 
-func (v *ShortValue) Size() byte {
+func (v *Short) Size() byte {
 	return 2
 }
 
-func (v *ShortValue) Data() int16 {
+func (v *Short) Data() int16 {
 	return int16(binary.LittleEndian.Uint16(v.view))
 }
 
-func (v *ShortValue) View() []byte {
+func (v *Short) View() []byte {
 	return v.view
 }
 
-var _ Allocable = (*ShortValue)(nil)
+var _ Allocatable = (*Short)(nil)

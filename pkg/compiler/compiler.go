@@ -5,68 +5,10 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/mwantia/vega/pkg/descriptor"
 	"github.com/mwantia/vega/pkg/parser"
 	"github.com/mwantia/vega/pkg/value"
 )
-
-type SymbolInfo struct {
-	SlotID   int
-	Tag      value.TypeTag
-	Mask     byte
-	Capacity int      // byte capacity for TagSlice variables (0 for scalar types)
-	Stencil  *Stencil // non-nil for struct/tuple variables
-}
-
-type SymbolTable struct {
-	symbols  map[string]SymbolInfo
-	nextSlot int
-}
-
-func newSymbolTable() *SymbolTable {
-	return &SymbolTable{
-		symbols:  make(map[string]SymbolInfo),
-		nextSlot: 0,
-	}
-}
-
-func (st *SymbolTable) Lookup(name string) (SymbolInfo, bool) {
-	info, ok := st.symbols[name]
-	return info, ok
-}
-
-func (st *SymbolTable) Define(name string, tag value.TypeTag, mask byte) SymbolInfo {
-	info := SymbolInfo{
-		SlotID: st.nextSlot,
-		Tag:    tag,
-		Mask:   mask,
-	}
-	st.symbols[name] = info
-	st.nextSlot++
-	return info
-}
-
-func (st *SymbolTable) DefineSlice(name string, capacity int) SymbolInfo {
-	info := SymbolInfo{
-		SlotID:   st.nextSlot,
-		Tag:      value.TagSlice,
-		Mask:     value.MaskForTag(value.TagSlice),
-		Capacity: capacity,
-	}
-	st.symbols[name] = info
-	st.nextSlot++
-	return info
-}
-
-func (st *SymbolTable) DefineStencil(name string, stencil *Stencil) SymbolInfo {
-	info := SymbolInfo{SlotID: st.nextSlot, Stencil: stencil}
-	st.symbols[name] = info
-	st.nextSlot++
-	return info
-}
-
-func (st *SymbolTable) Remove(name string) {
-	delete(st.symbols, name)
-}
 
 // Preallocated boolean constants — shared across all compilations to avoid
 // per-literal []byte allocations (AddConstant deduplicates by value).
@@ -77,12 +19,12 @@ var (
 
 type Compiler struct {
 	scope    *SymbolTable
-	stencils map[string]*Stencil
+	stencils map[string]*StencilDefinition
 }
 
 func NewCompiler() *Compiler {
 	return &Compiler{
-		stencils: make(map[string]*Stencil),
+		stencils: make(map[string]*StencilDefinition),
 	}
 }
 
@@ -92,7 +34,7 @@ func (c *Compiler) Compile(ast parser.AST) (*ByteCode, error) {
 		Constants:    make([]Constant, 0),
 		Names:        make([]string, 0),
 		LoopStack:    nil,
-		Functions:    make(map[string]*FunctionDef),
+		Functions:    make(map[string]*FunctionDefinition),
 	}
 
 	statements := ast.Statements()
@@ -144,15 +86,15 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 	case *parser.StructStatement:
 		// Build a stencil from the field declarations and register it.
 		// This is pure compile-time data — no bytecode emitted.
-		stencil := &Stencil{
+		stencil := &StencilDefinition{
 			Name:   s.Name,
-			Fields: make([]FieldLayout, 0, len(s.Fields)),
+			Fields: make([]StencilFieldLayout, 0, len(s.Fields)),
 		}
 		offset := 0
 		for _, f := range s.Fields {
 			if f.Capacity > 0 {
 				// Parameterised slice field: string<N> or byte<N>.
-				stencil.Fields = append(stencil.Fields, FieldLayout{
+				stencil.Fields = append(stencil.Fields, StencilFieldLayout{
 					Name:     f.Name,
 					Offset:   offset,
 					Tag:      value.TagSlice,
@@ -168,7 +110,7 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 				if size == 0 {
 					return fmt.Errorf("struct '%s': type '%s' for field '%s' requires an explicit capacity (use %s<N>)", s.Name, f.Type, f.Name, f.Type)
 				}
-				stencil.Fields = append(stencil.Fields, FieldLayout{
+				stencil.Fields = append(stencil.Fields, StencilFieldLayout{
 					Name:   f.Name,
 					Offset: offset,
 					Tag:    tag,
@@ -179,8 +121,25 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 		stencil.TotalSize = offset
 		c.stencils[s.Name] = stencil
 
+		// Also register into the global descriptor registry so the stencil is
+		// visible to external code and to method lookups on stencil types.
+		descFields := make([]descriptor.FieldLayoutDescriptor, len(stencil.Fields))
+		for i, f := range stencil.Fields {
+			descFields[i] = descriptor.FieldLayoutDescriptor{
+				Name:     f.Name,
+				Tag:      f.Tag,
+				Offset:   f.Offset,
+				Capacity: f.Capacity,
+			}
+		}
+		descriptor.Global.RegisterStencil(&descriptor.StencilDescriptor{
+			Name:   s.Name,
+			Fields: descFields,
+			Size:   stencil.TotalSize,
+		})
+
 	case *parser.FunctionStatement:
-		params := make([]ParamDef, len(s.Parameters))
+		params := make([]ParamDefinition, len(s.Parameters))
 
 		for i, p := range s.Parameters {
 			if len(p.Constraints) != 1 {
@@ -195,10 +154,10 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 			if tag, ok := value.TagForName(ident.Value); ok {
 				// Primitive type parameter (int, long, float, …)
 				mask := value.MaskForTag(tag)
-				params[i] = ParamDef{Name: p.Value, Tag: tag, Mask: mask}
+				params[i] = ParamDefinition{Name: p.Value, Tag: tag, Mask: mask}
 			} else if stencil, ok := c.stencils[ident.Value]; ok {
 				// Struct type parameter
-				params[i] = ParamDef{Name: p.Value, Stencil: stencil}
+				params[i] = ParamDefinition{Name: p.Value, Stencil: stencil}
 			} else {
 				return fmt.Errorf("function '%s': parameter '%s': unknown type '%s'",
 					s.Name.Value, p.Value, ident.Value)
@@ -215,8 +174,10 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 		}
 
 		// Enter function scope — parameters become variables in this scope.
+		// Use defer so the outer scope is always restored, even on compile error.
 		oldScope := c.scope
 		c.scope = newSymbolTable()
+		defer func() { c.scope = oldScope }()
 
 		// For each parameter: pull from the pending-args buffer, allocate a slot,
 		// and store the value. Primitive and struct params use different sequences.
@@ -262,9 +223,7 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 			}
 		}
 
-		// Restore the outer scope and register the compiled function.
-		c.scope = oldScope
-		b.Functions[s.Name.Value] = &FunctionDef{
+		b.Functions[s.Name.Value] = &FunctionDefinition{
 			Name:      s.Name.Value,
 			ByteCode:  fnCode,
 			Params:    params,
@@ -283,20 +242,22 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 		}
 
 	case *parser.CallStatement:
-		ident, ok := s.Function.(*parser.IdentifierExpression)
-		if !ok {
-			return fmt.Errorf("only identifier function calls are supported, got %T", s.Function)
-		}
-		for i, arg := range s.Arguments {
-			if _, err := c.compileExpression(b, arg); err != nil {
-				return fmt.Errorf("argument %d of call to '%s': %v", i, ident.Value, err)
+		switch fn := s.Function.(type) {
+		case *parser.IdentifierExpression:
+			for i, arg := range s.Arguments {
+				if _, err := c.compileExpression(b, arg); err != nil {
+					return fmt.Errorf("argument %d of call to '%s': %v", i, fn.Value, err)
+				}
 			}
-		}
-		// Prefer user-defined functions over native ones at compile time.
-		if _, isUserFunc := b.Functions[ident.Value]; isUserFunc {
-			b.EmitNameArg(OpCallFN, ident.Value, len(s.Arguments), s.Position().Line)
-		} else {
-			b.EmitNameArg(OpCallNAT, ident.Value, len(s.Arguments), s.Position().Line)
+			b.EmitNameArg(OpCall, fn.Value, len(s.Arguments), s.Position().Line)
+		case *parser.MethodCallExpression:
+			// Method call as a standalone statement — result is discarded.
+			if _, err := c.compileExpression(b, fn); err != nil {
+				return fmt.Errorf("method call statement: %w", err)
+			}
+			b.Emit(OpStackPOP, s.Position().Line)
+		default:
+			return fmt.Errorf("unsupported call target: %T", s.Function)
 		}
 
 	case *parser.DiscardStatement:
@@ -450,9 +411,9 @@ func (c *Compiler) compileStructAssignment(b *ByteCode, s *parser.AssignmentStat
 
 func (c *Compiler) compileTupleAssignment(b *ByteCode, s *parser.AssignmentStatement, tupleExpr *parser.TupleExpression) error {
 	// Build an anonymous stencil from the element types
-	stencil := &Stencil{
+	stencil := &StencilDefinition{
 		Name:   "",
-		Fields: make([]FieldLayout, 0, len(tupleExpr.Elements)),
+		Fields: make([]StencilFieldLayout, 0, len(tupleExpr.Elements)),
 	}
 	offset := 0
 	for i, elem := range tupleExpr.Elements {
@@ -460,7 +421,7 @@ func (c *Compiler) compileTupleAssignment(b *ByteCode, s *parser.AssignmentState
 		if err != nil {
 			return fmt.Errorf("tuple element %d: %v", i, err)
 		}
-		stencil.Fields = append(stencil.Fields, FieldLayout{
+		stencil.Fields = append(stencil.Fields, StencilFieldLayout{
 			Name:   fmt.Sprintf("%d", i),
 			Offset: offset,
 			Tag:    tag,
@@ -485,7 +446,7 @@ func (c *Compiler) compileTupleAssignment(b *ByteCode, s *parser.AssignmentState
 
 // emitStencilInit allocates a stencil slot on first use and returns its SymbolInfo.
 // If the variable already exists in scope (re-assignment), the existing slot is reused.
-func (c *Compiler) emitStencilInit(b *ByteCode, name string, stencil *Stencil, line int) SymbolInfo {
+func (c *Compiler) emitStencilInit(b *ByteCode, name string, stencil *StencilDefinition, line int) SymbolInfo {
 	if _, exists := c.scope.Lookup(name); !exists {
 		info := c.scope.DefineStencil(name, stencil)
 		b.EmitField(OpStencilALLOC, info.SlotID, stencil.TotalSize, 0, line)
@@ -557,7 +518,7 @@ func (c *Compiler) compileExpression(b *ByteCode, expr parser.Expression) (value
 		}
 		if info.Stencil != nil {
 			// Struct variable — push a snapshot of its raw bytes onto the expr stack
-			// so it can be passed as a function argument via OpCallFN.
+			// so it can be passed as a function argument via OpCall.
 			b.EmitField(OpVarLoadRaw, info.SlotID, info.Stencil.TotalSize, 0, e.Position().Line)
 		} else {
 			b.EmitArg(OpVarLOAD, info.SlotID, e.Position().Line)
@@ -577,29 +538,85 @@ func (c *Compiler) compileExpression(b *ByteCode, expr parser.Expression) (value
 		b.EmitArgExtra(OpPtrLOAD, 0, byte(tag), e.Position().Line)
 		return tag, nil
 	case *parser.AttributeExpression:
-		// Field access on a struct/tuple: obj.field or obj.0
-		ident, ok := e.Object.(*parser.IdentifierExpression)
+		// If the object is a known stencil (struct/tuple) variable, use static
+		// compile-time field dispatch via OpFieldLOAD.
+		if ident, ok := e.Object.(*parser.IdentifierExpression); ok {
+			if info, exists := c.scope.Lookup(ident.Value); exists && info.Stencil != nil {
+				fieldName := e.Attribute.Value
+				field, ok := info.Stencil.LookupField(fieldName)
+				if !ok {
+					return 0, fmt.Errorf("struct '%s' has no field '%s'", info.Stencil.Name, fieldName)
+				}
+				if field.Tag == value.TagSlice {
+					b.EmitFieldSize(OpFieldLOAD, info.SlotID, field.Offset, byte(field.Tag), field.Capacity, e.Position().Line)
+				} else {
+					b.EmitField(OpFieldLOAD, info.SlotID, field.Offset, byte(field.Tag), e.Position().Line)
+				}
+				return field.Tag, nil
+			}
+		}
+		// Generic fallback: compile the object and dispatch at runtime via the
+		// descriptor registry.
+		recvTag, err := c.compileExpression(b, e.Object)
+		if err != nil {
+			return 0, fmt.Errorf("member access object: %w", err)
+		}
+		b.EmitNameArg(OpGetMember, e.Attribute.Value, 0, e.Position().Line)
+		// Use the descriptor registry to infer the return type at compile time.
+		if desc, ok := descriptor.Global.LookupMember(recvTag, e.Attribute.Value); ok {
+			return desc.ReturnTag, nil
+		}
+		return 0, nil
+
+	case *parser.MethodCallExpression:
+		// Compile the receiver object first, then arguments, then dispatch at
+		// runtime via the descriptor registry.
+		recvTag, err := c.compileExpression(b, e.Object)
+		if err != nil {
+			return 0, fmt.Errorf("method call receiver: %w", err)
+		}
+		desc, hasDesc := descriptor.Global.LookupMethod(recvTag, e.Method.Value)
+		args := e.Arguments
+		if hasDesc {
+			if args, err = reorderArgs(desc.Params, args); err != nil {
+				return 0, fmt.Errorf("method '%s': %w", e.Method.Value, err)
+			}
+		}
+		for i, arg := range args {
+			if _, err := c.compileExpression(b, arg); err != nil {
+				return 0, fmt.Errorf("method '%s' argument %d: %w", e.Method.Value, i, err)
+			}
+		}
+		b.EmitNameArg(OpCallMethod, e.Method.Value, len(args), e.Position().Line)
+		if hasDesc {
+			return desc.ReturnTag, nil
+		}
+		return 0, nil
+
+	case *parser.CallExpression:
+		fn, ok := e.Function.(*parser.IdentifierExpression)
 		if !ok {
-			return 0, fmt.Errorf("field access requires an identifier, got %T", e.Object)
+			return 0, fmt.Errorf("call expression: unsupported callee type %T", e.Function)
 		}
-		info, exists := c.scope.Lookup(ident.Value)
-		if !exists {
-			return 0, fmt.Errorf("undefined variable '%s'", ident.Value)
+		desc, hasDesc := descriptor.Global.LookupStatic(fn.Value)
+		args := e.Arguments
+		if hasDesc {
+			var err error
+			if args, err = reorderArgs(desc.Params, args); err != nil {
+				return 0, fmt.Errorf("call '%s': %w", fn.Value, err)
+			}
 		}
-		if info.Stencil == nil {
-			return 0, fmt.Errorf("variable '%s' is not a struct or tuple", ident.Value)
+		for i, arg := range args {
+			if _, err := c.compileExpression(b, arg); err != nil {
+				return 0, fmt.Errorf("argument %d of call to '%s': %w", i, fn.Value, err)
+			}
 		}
-		fieldName := e.Attribute.Value
-		field, ok := info.Stencil.LookupField(fieldName)
-		if !ok {
-			return 0, fmt.Errorf("struct '%s' has no field '%s'", info.Stencil.Name, fieldName)
+		b.EmitNameArgExtra(OpCall, fn.Value, len(args), 1, e.Position().Line)
+		if hasDesc {
+			return desc.ReturnTag, nil
 		}
-		if field.Tag == value.TagSlice {
-			b.EmitFieldSize(OpFieldLOAD, info.SlotID, field.Offset, byte(field.Tag), field.Capacity, e.Position().Line)
-		} else {
-			b.EmitField(OpFieldLOAD, info.SlotID, field.Offset, byte(field.Tag), e.Position().Line)
-		}
-		return field.Tag, nil
+		return 0, nil
+
 	default:
 		return 0, fmt.Errorf("unknown expression type: %T", e)
 	}
@@ -670,7 +687,72 @@ func (c *Compiler) inferTypeTag(expr parser.Expression) (value.TypeTag, error) {
 			return 0, fmt.Errorf("struct '%s' has no field '%s'", info.Stencil.Name, expr.Attribute.Value)
 		}
 		return 0, fmt.Errorf("cannot infer type from attribute expression")
+	case *parser.MethodCallExpression:
+		return 0, fmt.Errorf("cannot infer type from method call (use explicit type annotation)")
 	default:
 		return 0, fmt.Errorf("cannot infer type from expression %T", expr)
 	}
+}
+
+// reorderArgs resolves named arguments in rawArgs to positional order using
+// the given param descriptors. If no named arguments are present the original
+// slice is returned unchanged. Positional and named arguments may be mixed:
+// positional args fill slots left-to-right, named args fill their declared
+// position. Trailing absent optional params are trimmed from the result.
+func reorderArgs(params []descriptor.ParameterLayoutDescriptor, rawArgs []parser.Expression) ([]parser.Expression, error) {
+	hasNamed := false
+	for _, a := range rawArgs {
+		if _, ok := a.(*parser.NamedArgumentExpression); ok {
+			hasNamed = true
+			break
+		}
+	}
+	if !hasNamed {
+		return rawArgs, nil
+	}
+	if len(params) == 0 {
+		return nil, fmt.Errorf("function accepts no parameters; named arguments are not allowed")
+	}
+
+	result := make([]parser.Expression, len(params))
+	nextPos := 0
+	for _, a := range rawArgs {
+		if named, ok := a.(*parser.NamedArgumentExpression); ok {
+			pos := -1
+			for _, p := range params {
+				if p.Name == named.Name {
+					pos = p.Position
+					break
+				}
+			}
+			if pos < 0 {
+				return nil, fmt.Errorf("unknown named argument '%s'", named.Name)
+			}
+			if result[pos] != nil {
+				return nil, fmt.Errorf("argument '%s' provided more than once", named.Name)
+			}
+			result[pos] = named.Value
+		} else {
+			for nextPos < len(result) && result[nextPos] != nil {
+				nextPos++
+			}
+			if nextPos >= len(result) {
+				return nil, fmt.Errorf("too many positional arguments")
+			}
+			result[nextPos] = a
+			nextPos++
+		}
+	}
+
+	// Trim trailing nils (absent optional params) and validate no holes remain.
+	end := len(result)
+	for end > 0 && result[end-1] == nil {
+		end--
+	}
+	for i := 0; i < end; i++ {
+		if result[i] == nil {
+			return nil, fmt.Errorf("missing argument for parameter '%s'", params[i].Name)
+		}
+	}
+	return result[:end], nil
 }

@@ -219,3 +219,218 @@ When the owning region is freed (i.e. the frame exits), a typed reference to tha
 This item is deliberately left open until the region model (step 6) is fully implemented and the interaction between regions and lifetimes is understood in practice.
 
 See: [Memory Model](02-memory-model.md), [Type System](03-type-system.md).
+
+---
+
+## 8. Descriptor Registry — Unified Extension System
+
+### Problem
+
+Three independent extension mechanisms exist and share the same structural flaw: their type information is opaque to the compiler.
+
+**Native functions** (`pkg/vm/native.go`): registered with a void `func(*Native, []Value) error` signature. The compiler cannot see what type they return, so `y = read("/path")` is impossible — the slot for `y` cannot be sized without a hardcoded lookup table.
+
+**Methodable / Memberable** (`pkg/value/interfaces.go`): values implement these interfaces via a large `switch name` inside `Method()` / `GetMember()`. Same flaw: the return type of `x.upper()` is hidden behind `(Value, error)`. The compiler must either hardcode a per-method type table (not extensible) or fall back to a 0-size dynamic slot (broken, as seen with `y = x.length()`).
+
+**Stencils** (`pkg/compiler/compiler.go`): the only mechanism that works correctly. Each field in a `Stencil` carries a `Tag`, `Offset`, and `Capacity`. The compiler calls `stencil.LookupField(name)` and gets back everything it needs. But stencils are private compiler state — external code cannot register new struct types.
+
+**Root cause**: stencils expose their metadata to the compiler. Methods and natives do not.
+
+---
+
+### Proposed Architecture
+
+Split into two packages:
+
+**`pkg/descriptor`** — framework only, no implementations.
+Defines the descriptor types, the global registry, and the lookup functions used by both compiler and VM. Imports only `pkg/value`. Neither the compiler nor the VM put implementations here.
+
+**`pkg/extension`** — standard library built on `pkg/descriptor`.
+Registers all built-in methods, members, native functions, and stencils via `init()`. External users follow the same pattern in their own packages.
+
+---
+
+### `pkg/descriptor` — Descriptor Types
+
+```go
+// FieldLayoutDescriptor describes one field in a struct (replaces compiler.FieldLayout).
+type FieldLayoutDescriptor struct {
+    Name     string
+    Tag      value.TypeTag
+    Offset   int
+    Capacity int // > 0 for slice fields
+}
+
+// StencilDescriptor describes a registered struct type (replaces compiler.Stencil).
+// The compiler queries this instead of its private stencils map.
+type StencilDescriptor struct {
+    Name    string
+    Fields  []FieldLayoutDescriptor
+    Methods []MethodDescriptor
+    Size    int // total byte width
+}
+
+// ParameterLayoutDescriptor
+type ParameterLayoutDescriptor struct {
+    Name     string
+    Tag      value.TypeTag
+    Position int
+    Default  value.Value
+    Required bool // Parameters that are optional need to be placed to the end.
+}
+
+// MethodDescriptor describes a method callable on a value of a given TypeTag.
+// ReturnTag is used by the compiler for type inference at the call site.
+type MethodDescriptor struct {
+    Name      string
+    Params    []ParameterLayoutDescriptor // expected argument types (in order)
+    ReturnTag value.TypeTag   // 0 = void / no assignable result
+    Run       func(inst value.Value, args []value.Value) (value.Value, error)
+}
+
+// MemberDescriptor describes a named property readable (and optionally writable)
+// on a value of a given TypeTag.
+type MemberDescriptor struct {
+    Name      string
+    ReturnTag value.TypeTag
+    Get       func(inst value.Value) (value.Value, error)
+    Set       func(inst value.Value, val value.Value) error // nil = read-only
+}
+
+// NativeDescriptor describes a free (non-method) function callable from Vega.
+// NativeCtx carries the IO handles and VFS reference (replaces vm.Native).
+// ReturnTag is used by the compiler; 0 means void.
+type NativeDescriptor struct {
+    Name      string
+    Params    []ParameterLayoutDescriptor // nil = variadic / untyped
+    ReturnTag value.TypeTag
+    Run       func(ctx *NativeCtx, args []value.Value) (value.Value, error)
+}
+
+// NativeCtx is the host-side context passed to every NativeDescriptor at runtime.
+// Moving it here breaks the current vm → pkg/descriptor import dependency.
+type NativeCtx struct {
+    Stdin  io.Reader
+    Stdout io.Writer
+    Stderr io.Writer
+    FS     vfs.VirtualFileSystem
+}
+```
+
+---
+
+### `pkg/descriptor` — Registry
+
+```go
+// Per-TypeTag registries
+func RegisterMethod(tag value.TypeTag, desc *MethodDescriptor)
+func RegisterMember(tag value.TypeTag, desc *MemberDescriptor)
+
+// Named registries (keyed by Name field)
+func RegisterStencil(desc *StencilDescriptor)
+func RegisterNative(desc *NativeDescriptor)
+
+// Compiler-facing lookups
+func LookupMethod(tag value.TypeTag, name string) (*MethodDescriptor, bool)
+func LookupMember(tag value.TypeTag, name string) (*MemberDescriptor, bool)
+func LookupStencil(name string) (*StencilDescriptor, bool)
+func LookupNative(name string) (*NativeDescriptor, bool)
+```
+
+---
+
+### `pkg/extension` — Registration Pattern
+
+Built-ins are registered in `init()` functions, one file per type or concern. External users follow the exact same pattern.
+
+```go
+// pkg/extension/slice.go
+func init() {
+    descriptor.RegisterMethod(value.TagSlice, &descriptor.MethodDescriptor{
+        Name:      "upper",
+        Params:    []descriptor.ParameterLayoutDescriptor{},
+        ReturnTag: value.TagSlice,
+        Run: func(inst value.Value, args []value.Value) (value.Value, error) {
+            return value.NewSlice([]byte(strings.ToUpper(inst.String()))), nil
+        },
+    })
+
+    descriptor.RegisterMember(value.TagSlice, &descriptor.MemberDescriptor{
+        Name:      "length",
+        ReturnTag: value.TagInteger,
+        Get: func(inst value.Value) (value.Value, error) {
+            n := inst.(*value.SliceValue).Length()
+            // encode n as little-endian int32
+            ...
+        },
+    })
+}
+
+// pkg/extension/native.go
+func init() {
+    descriptor.RegisterNative(&descriptor.NativeDescriptor{
+        Name:      "print",
+        Params:    []descriptor.ParameterLayoutDescriptor{
+            {Name="s", Tag: value.TagSlice, Required: true},
+        }, // variadic
+        ReturnTag: 0,   // void
+        Run: func(ctx *descriptor.NativeCtx, args []value.Value) (value.Value, error) {
+            ...
+        },
+    })
+}
+
+// pkg/extension/stencil.go (example: a built-in "error" struct)
+func init() {
+    descriptor.RegisterStencil(&descriptor.StencilDescriptor{
+        Name: "error",
+        Fields: []descriptor.FieldLayoutDescriptor{
+            {Name: "code",    Tag: value.TagInteger, Offset: 0},
+            {Name: "message", Tag: value.TagSlice,   Offset: 4, Capacity: 128},
+        },
+        Size: 132,
+    })
+}
+```
+
+---
+
+### Compiler Changes
+
+The compiler stops maintaining its own `stencils map[string]*Stencil` and `lookupNative` call. Instead:
+
+```
+StructStatement   → descriptor.RegisterStencil(...)      (at compile time, user-declared)
+AttributeExpr     → descriptor.LookupStencil(name)       (field type + offset)
+MethodCallExpr    → descriptor.LookupMethod(tag, name)   (ReturnTag for slot sizing)
+AttributeExpr*    → descriptor.LookupMember(tag, name)   (ReturnTag for slot sizing)
+CallStatement     → descriptor.LookupNative(name)        (ReturnTag for slot sizing)
+```
+
+`*` For non-stencil attribute access (e.g. `x.length` where x is a slice, not a struct).
+
+The compiler can now error at compile time when a method or member is not registered for a type, or when argument count/types do not match — no runtime surprises.
+
+---
+
+### VM Changes
+
+`OpCallMethod`, `OpGetMember`, `OpCallNAT` all look up the descriptor and call `def.Run(...)` instead of type-asserting to `Methodable`/`Memberable` or calling a registry function directly.
+
+`Methodable` and `Memberable` interfaces on `SliceValue` are removed. The implementation moves into `pkg/extension/slice.go` as plain functions referenced by `MethodDescriptor.Run`.
+
+`vm.Native` is replaced by `descriptor.NativeCtx`. The VM constructs a `NativeCtx` per `Run()` call and passes it to `NativeDescriptor.Run`.
+
+---
+
+- **Stencil methods**: `point.distance(other)` — methods registered against a stencil (by name, not TypeTag). StencilDescriptor have its own `Methods []MethodDescriptor`. The compiler resolves `p.distance(q)` by looking up the stencil for `p`'s type and checking its methods before falling back to the TypeTag method registry.
+
+- **ReturnTag for slice methods**: `x.upper()` returns `TagSlice` but the compiler cannot size the slot without a capacity. Options: (a) `ReturnTag: TagSlice` causes the compiler to require an explicit `<N>` annotation at the call site, consistent with how all other slice assignments work; (b) `MethodDescriptor` adds an optional `ReturnCapacity int` field that the compiler uses to auto-size the slot for known-capacity methods.
+
+- **Return value for void natives**: `NativeDescriptor.ReturnTag == 0` means void. The VM discards the return. Convention: `Run` returns `(nil, nil)` for void. The VM only pushes `value.Nil` when `ReturnTag != 0`.
+
+- **User-defined function return types**: functions declared in Vega (`fn foo() -> int`) will also be compiled into a `NativeDescriptor`-like descriptor entry so the compiler can look up their return type. We will use the same concept as stencils, which currently are registered back into the compiler.
+
+- **Thread safety**: the registry is written at `init()` time (before any VM runs) and read during compilation/execution. If dynamic registration at runtime is ever needed (plugin loading), the registry needs a RWMutex.
+
+See: [Compiler](05-compiler.md), [Runtime](06-runtime.md), [Type System](03-type-system.md).

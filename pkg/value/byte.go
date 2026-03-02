@@ -2,36 +2,36 @@ package value
 
 import "strconv"
 
-// ByteValue wraps uint8. Size = 1 byte.
+// Byte wraps uint8. Size = 1 byte.
 // The view slice points into the alloc buffer — no data is owned.
-type ByteValue struct {
+type Byte struct {
 	view []byte
 }
 
-func NewByte(view []byte) *ByteValue {
-	return &ByteValue{
+func NewByte(view []byte) *Byte {
+	return &Byte{
 		view: view,
 	}
 }
 
-func (v *ByteValue) Type() string {
+func (v *Byte) Type() string {
 	return "byte"
 }
 
-func (v *ByteValue) String() string {
+func (v *Byte) String() string {
 	return strconv.Itoa(int(v.view[0]))
 }
 
-func (v *ByteValue) Size() byte {
+func (v *Byte) Size() byte {
 	return 1
 }
 
-func (v *ByteValue) Data() byte {
+func (v *Byte) Data() byte {
 	return v.view[0]
 }
 
-func (v *ByteValue) View() []byte {
+func (v *Byte) View() []byte {
 	return v.view
 }
 
-var _ Allocable = (*ByteValue)(nil)
+var _ Allocatable = (*Byte)(nil)

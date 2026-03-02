@@ -17,8 +17,8 @@ type Memberable interface {
 	SetMember(name string, val Value) (bool, error)
 }
 
-// Allocable
-type Allocable interface {
+// Allocatable
+type Allocatable interface {
 	Value
 	// Size returns the known size of the value type that needs to be allocated.
 	Size() byte
@@ -29,14 +29,14 @@ type Allocable interface {
 
 // Comparable
 type Comparable interface {
-	Allocable
+	Allocatable
 	// Compare returns an integer comparing two comparable values.
 	Compare(other Comparable) (int, error)
 }
 
 // Numeric
 type Numeric interface {
-	Allocable
+	Allocatable
 	// Add
 	Add(other Numeric) (Numeric, error)
 

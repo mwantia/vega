@@ -5,8 +5,8 @@ import "fmt"
 type Instruction struct {
 	Operation  OperationCode
 	Argument   int  // Numeric argument (index, count or offset)
-	Offset     int  // Field byte offset (for OpFieldLOAD/OpFieldSTORE); name index for OpCallNAT/OpCallFN; capacity for OpSliceALLOC
-	Extra      byte // Extra byte (carries type tag for OpVarALLOC/OpFieldSTORE/OpFieldLOAD)
+	Offset     int  // Field byte offset (for OpFieldLOAD/OpFieldSTORE); name index for OpCall/OpCallMethod; capacity for OpSliceALLOC
+	Extra      byte // Extra byte (type tag for OpVarALLOC/OpFieldSTORE/OpFieldLOAD; 0=stmt/1=expr for OpCall)
 	Size       int  // Field byte size for OpFieldSTORE/OpFieldLOAD (needed for TagSlice fields whose SizeForTag returns 0)
 	SourceLine int  // Source line number for error reporting
 }

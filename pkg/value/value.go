@@ -9,17 +9,18 @@ type Value interface {
 	String() string
 }
 
-// --- String value ---
+// Nil is a singleton sentinel. Not allocable, not a slice.
+type Nil struct{}
 
-// --- Nil ---
+func (v *Nil) Type() string {
+	return "nil"
+}
 
-// NilValue is a singleton sentinel. Not allocable, not a slice.
-type NilValue struct{}
+func (v *Nil) String() string {
+	return "nil"
+}
 
-func (v *NilValue) Type() string   { return "nil" }
-func (v *NilValue) String() string { return "nil" }
-
-var _ Value = (*NilValue)(nil)
+var _ Value = (*Nil)(nil)
 
 // Nil is the package-level nil singleton.
-var Nil = &NilValue{}
+var NilSingleton = &Nil{}

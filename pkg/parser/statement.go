@@ -7,19 +7,9 @@ import (
 )
 
 type CallStatement struct {
-	Token     lexer.Token
+	BaseStatement
 	Function  Expression
 	Arguments []Expression
-}
-
-func (cs *CallStatement) Statement() {}
-
-func (cs *CallStatement) Literal() string {
-	return cs.Token.Literal
-}
-
-func (cs *CallStatement) Position() lexer.TokenPosition {
-	return cs.Token.Position
 }
 
 func (cs *CallStatement) String() string {
@@ -39,44 +29,22 @@ func (cs *CallStatement) String() string {
 var _ Statement = (*CallStatement)(nil)
 
 type DiscardStatement struct {
-	Token lexer.Token
+	BaseStatement
 	Value Expression // must be a CallExpression
 }
 
-func (ds *DiscardStatement) Statement() {}
-
-func (ds *DiscardStatement) Literal() string {
-	return ds.Token.Literal
-}
-
-func (ds *DiscardStatement) Position() lexer.TokenPosition {
-	return ds.Token.Position
-}
-
-func (ds *DiscardStatement) String() string {
-	return "_ = " + ds.Value.String()
-}
+func (ds *DiscardStatement) String() string { return "_ = " + ds.Value.String() }
 
 var _ Statement = (*DiscardStatement)(nil)
 
 type AssignmentStatement struct {
-	Token       lexer.Token
+	BaseStatement
 	Name        *IdentifierExpression
 	Constraints []Expression
 	Value       Expression
 }
 
-func (as *AssignmentStatement) Statement() {
-
-}
-
-func (as *AssignmentStatement) Literal() string {
-	return as.Token.Literal
-}
-
-func (as *AssignmentStatement) Position() lexer.TokenPosition {
-	return as.Name.Position()
-}
+func (as *AssignmentStatement) Position() lexer.TokenPosition { return as.Name.Position() }
 
 func (as *AssignmentStatement) String() string {
 	if len(as.Constraints) > 0 {
@@ -92,22 +60,12 @@ func (as *AssignmentStatement) String() string {
 var _ Statement = (*AssignmentStatement)(nil)
 
 type IndexAssignmentStatement struct {
-	Token lexer.Token
+	BaseStatement
 	Left  *IndexExpression
 	Value Expression
 }
 
-func (ias *IndexAssignmentStatement) Statement() {
-
-}
-
-func (ias *IndexAssignmentStatement) Literal() string {
-	return ias.Token.Literal
-}
-
-func (ias *IndexAssignmentStatement) Position() lexer.TokenPosition {
-	return ias.Left.Position()
-}
+func (ias *IndexAssignmentStatement) Position() lexer.TokenPosition { return ias.Left.Position() }
 
 func (ias *IndexAssignmentStatement) String() string {
 	return ias.Left.String() + " = " + ias.Value.String()
@@ -116,20 +74,8 @@ func (ias *IndexAssignmentStatement) String() string {
 var _ Statement = (*IndexAssignmentStatement)(nil)
 
 type BlockStatement struct {
-	Token      lexer.Token
+	BaseStatement
 	Statements []Statement
-}
-
-func (bs *BlockStatement) Statement() {
-
-}
-
-func (bs *BlockStatement) Literal() string {
-	return bs.Token.Literal
-}
-
-func (bs *BlockStatement) Position() lexer.TokenPosition {
-	return bs.Token.Position
 }
 
 func (bs *BlockStatement) String() string {
@@ -147,22 +93,10 @@ func (bs *BlockStatement) String() string {
 var _ Statement = (*BlockStatement)(nil)
 
 type IfStatement struct {
-	Token       lexer.Token
+	BaseStatement
 	Condition   Expression
 	Consequence *BlockStatement
 	Alternative *BlockStatement
-}
-
-func (is *IfStatement) Statement() {
-
-}
-
-func (is *IfStatement) Literal() string {
-	return is.Token.Literal
-}
-
-func (is *IfStatement) Position() lexer.TokenPosition {
-	return is.Token.Position
 }
 
 func (is *IfStatement) String() string {
@@ -181,22 +115,10 @@ func (is *IfStatement) String() string {
 var _ Statement = (*IfStatement)(nil)
 
 type ForStatement struct {
-	Token    lexer.Token
+	BaseStatement
 	Variable *IdentifierExpression
 	Iterable Expression
 	Body     *BlockStatement
-}
-
-func (fs *ForStatement) Statement() {
-
-}
-
-func (fs *ForStatement) Literal() string {
-	return fs.Token.Literal
-}
-
-func (fs *ForStatement) Position() lexer.TokenPosition {
-	return fs.Token.Position
 }
 
 func (fs *ForStatement) String() string {
@@ -213,21 +135,9 @@ func (fs *ForStatement) String() string {
 var _ Statement = (*ForStatement)(nil)
 
 type WhileStatement struct {
-	Token     lexer.Token
+	BaseStatement
 	Condition Expression
 	Body      *BlockStatement
-}
-
-func (ws *WhileStatement) Statement() {
-
-}
-
-func (ws *WhileStatement) Literal() string {
-	return ws.Token.Literal
-}
-
-func (ws *WhileStatement) Position() lexer.TokenPosition {
-	return ws.Token.Position
 }
 
 func (ws *WhileStatement) String() string {
@@ -242,22 +152,10 @@ func (ws *WhileStatement) String() string {
 var _ Statement = (*WhileStatement)(nil)
 
 type FunctionStatement struct {
-	Token      lexer.Token
+	BaseStatement
 	Name       *IdentifierExpression
 	Parameters []*DeclarationExpression
 	Body       *BlockStatement
-}
-
-func (fd *FunctionStatement) Statement() {
-
-}
-
-func (fd *FunctionStatement) Literal() string {
-	return fd.Token.Literal
-}
-
-func (fd *FunctionStatement) Position() lexer.TokenPosition {
-	return fd.Token.Position
 }
 
 func (fd *FunctionStatement) String() string {
@@ -278,20 +176,8 @@ func (fd *FunctionStatement) String() string {
 var _ Statement = (*FunctionStatement)(nil)
 
 type ReturnStatement struct {
-	Token lexer.Token
+	BaseStatement
 	Value Expression
-}
-
-func (rs *ReturnStatement) Statement() {
-
-}
-
-func (rs *ReturnStatement) Literal() string {
-	return rs.Token.Literal
-}
-
-func (rs *ReturnStatement) Position() lexer.TokenPosition {
-	return rs.Token.Position
 }
 
 func (rs *ReturnStatement) String() string {
@@ -303,97 +189,41 @@ func (rs *ReturnStatement) String() string {
 
 var _ Statement = (*ReturnStatement)(nil)
 
-// BreakStatement represents a break statement.
 type BreakStatement struct {
-	Token lexer.Token
+	BaseStatement
 }
 
-func (bs *BreakStatement) Statement() {
-
-}
-
-func (bs *BreakStatement) Literal() string {
-	return bs.Token.Literal
-}
-
-func (bs *BreakStatement) Position() lexer.TokenPosition {
-	return bs.Token.Position
-}
-
-func (bs *BreakStatement) String() string {
-	return "break"
-}
+func (*BreakStatement) String() string { return "break" }
 
 var _ Statement = (*BreakStatement)(nil)
 
-// ContinueStatement represents a continue statement.
 type ContinueStatement struct {
-	Token lexer.Token
+	BaseStatement
 }
 
-func (cs *ContinueStatement) Statement() {
-
-}
-
-func (cs *ContinueStatement) Literal() string {
-	return cs.Token.Literal
-}
-
-func (cs *ContinueStatement) Position() lexer.TokenPosition {
-	return cs.Token.Position
-}
-
-func (cs *ContinueStatement) String() string {
-	return "continue"
-}
+func (*ContinueStatement) String() string { return "continue" }
 
 var _ Statement = (*ContinueStatement)(nil)
 
 type FreeStatement struct {
-	Token lexer.Token
-	Name  *IdentifierExpression
+	BaseStatement
+	Name *IdentifierExpression
 }
 
-func (fs *FreeStatement) Statement() {
-
-}
-
-func (fs *FreeStatement) Literal() string {
-	return fs.Token.Literal
-}
-
-func (fs *FreeStatement) Position() lexer.TokenPosition {
-	return fs.Token.Position
-}
-
-func (fs *FreeStatement) String() string {
-	return "free(" + fs.Name.String() + ")"
-}
+func (fs *FreeStatement) String() string { return "free(" + fs.Name.String() + ")" }
 
 var _ Statement = (*FreeStatement)(nil)
 
-// StructField represents a single field declaration inside a struct definition.
 type StructField struct {
 	Name     string
 	Type     string // type name (e.g. "int", "bool", "string", "byte")
 	Capacity int    // >0 for parameterised slice fields (e.g. string<10> → Capacity=10)
 }
 
-// StructStatement represents a struct type definition: struct name { field: type, ... }
 type StructStatement struct {
-	Token  lexer.Token
+	BaseStatement
 	Name   string
 	Fields []StructField
-}
-
-func (ss *StructStatement) Statement() {}
-
-func (ss *StructStatement) Literal() string {
-	return ss.Token.Literal
-}
-
-func (ss *StructStatement) Position() lexer.TokenPosition {
-	return ss.Token.Position
 }
 
 func (ss *StructStatement) String() string {

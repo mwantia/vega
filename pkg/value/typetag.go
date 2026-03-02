@@ -4,6 +4,7 @@ package value
 type TypeTag byte
 
 const (
+	TagVoid    TypeTag = 0
 	TagShort   TypeTag = 1 // int16,   2 bytes
 	TagInteger TypeTag = 2 // int32,   4 bytes
 	TagLong    TypeTag = 3 // int64,   8 bytes
@@ -12,26 +13,47 @@ const (
 	TagBoolean TypeTag = 6 // bool,    1 byte
 	TagByte    TypeTag = 7 // uint8,   1 byte
 	TagSlice   TypeTag = 8 // []byte,  bounded capacity (SizeForTag returns 0; capacity is always external)
+
+	// TagAny is a sentinel used in ParameterLayoutDescriptor.Tag to indicate
+	// that a parameter accepts a value of any type. It is never used for
+	// allocation or bitmask operations.
+	TagAny TypeTag = 0xFF
 )
 
-// TagFor returns the TypeTag for an Allocable value.
-func TagFor(a Allocable) TypeTag {
+var tagByName = map[string]TypeTag{
+	"short":   TagShort,
+	"int16":   TagShort,
+	"int":     TagInteger,
+	"int32":   TagInteger,
+	"long":    TagLong,
+	"int64":   TagLong,
+	"float":   TagFloat,
+	"decimal": TagDecimal,
+	"bool":    TagBoolean,
+	"byte":    TagByte,
+	"string":  TagSlice,
+	"any":     TagAny,
+	"void":    TagVoid,
+}
+
+// TagFor returns the TypeTag for an Allocatable value.
+func TagFor(a Allocatable) TypeTag {
 	switch a.(type) {
-	case *ShortValue:
+	case *Short:
 		return TagShort
-	case *IntegerValue:
+	case *Integer:
 		return TagInteger
-	case *LongValue:
+	case *Long:
 		return TagLong
-	case *FloatValue:
+	case *Float:
 		return TagFloat
-	case *DecimalValue:
+	case *Decimal:
 		return TagDecimal
-	case *BooleanValue:
+	case *Boolean:
 		return TagBoolean
-	case *ByteValue:
+	case *Byte:
 		return TagByte
-	case *SliceValue:
+	case *Slice:
 		return TagSlice
 	default:
 		return 0
@@ -40,30 +62,17 @@ func TagFor(a Allocable) TypeTag {
 
 // TagForName resolves a type name string to its TypeTag.
 func TagForName(name string) (TypeTag, bool) {
-	switch name {
-	case "short":
-		return TagShort, true
-	case "int":
-		return TagInteger, true
-	case "long":
-		return TagLong, true
-	case "float":
-		return TagFloat, true
-	case "decimal":
-		return TagDecimal, true
-	case "bool":
-		return TagBoolean, true
-	case "byte":
-		return TagByte, true
-	case "str", "string":
-		return TagSlice, true
-	default:
-		return 0, false
+	if tag, ok := tagByName[name]; ok {
+		return tag, true
 	}
+	return 0, false
 }
 
+// NameForTag
 func NameForTag(tag TypeTag) (string, bool) {
 	switch tag {
+	case TagVoid:
+		return "void", true
 	case TagShort:
 		return "short", true
 	case TagInteger:
@@ -80,14 +89,19 @@ func NameForTag(tag TypeTag) (string, bool) {
 		return "byte", true
 	case TagSlice:
 		return "slice", true
+	case TagAny:
+		return "any", true
 	default:
 		return "", false
 	}
 }
 
 // MaskForTag returns a bitmask with the bit for the given tag set.
-// Tags 1–8 map to bits 0–7.
+// Tags 1–8 map to bits 0–7. TagAny returns 0xFF (all concrete types).
 func MaskForTag(tag TypeTag) byte {
+	if tag == TagAny {
+		return 0xFF
+	}
 	if tag < 1 || tag > 8 {
 		return 0
 	}
@@ -116,6 +130,8 @@ func MaxSizeForMask(mask byte) int {
 // Returns 0 for TagSlice — capacity is always provided externally.
 func SizeForTag(tag TypeTag) int {
 	switch tag {
+	case TagVoid:
+		return 0
 	case TagShort:
 		return 2
 	case TagInteger:
@@ -132,6 +148,8 @@ func SizeForTag(tag TypeTag) int {
 		return 1
 	case TagSlice:
 		return 0 // capacity is always provided externally; SizeForTag is not meaningful for slices
+	case TagAny:
+		return 0
 	default:
 		return 0
 	}

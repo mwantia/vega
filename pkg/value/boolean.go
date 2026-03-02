@@ -1,22 +1,22 @@
 package value
 
-// BooleanValue wraps bool. Size = 1 byte.
+// Boolean wraps bool. Size = 1 byte.
 // The view slice points into the alloc buffer — no data is owned.
-type BooleanValue struct {
+type Boolean struct {
 	view []byte
 }
 
-func NewBoolean(view []byte) *BooleanValue {
-	return &BooleanValue{
+func NewBoolean(view []byte) *Boolean {
+	return &Boolean{
 		view: view,
 	}
 }
 
-func (v *BooleanValue) Type() string {
+func (v *Boolean) Type() string {
 	return "boolean"
 }
 
-func (v *BooleanValue) String() string {
+func (v *Boolean) String() string {
 	if v.Data() {
 		return "true"
 	}
@@ -24,16 +24,16 @@ func (v *BooleanValue) String() string {
 	return "false"
 }
 
-func (v *BooleanValue) Size() byte {
+func (v *Boolean) Size() byte {
 	return 1
 }
 
-func (v *BooleanValue) Data() bool {
+func (v *Boolean) Data() bool {
 	return v.view[0] != 0
 }
 
-func (v *BooleanValue) View() []byte {
+func (v *Boolean) View() []byte {
 	return v.view
 }
 
-var _ Allocable = (*BooleanValue)(nil)
+var _ Allocatable = (*Boolean)(nil)

@@ -1,28 +1,55 @@
 package value
 
-import "fmt"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
-// ToInt extracts an integer offset from an Allocable value.
-// Supports byte, short, int, and long types.
-func ToInt(a Allocable) (int, error) {
+func EncodeInteger(n int) []byte {
+	data := make([]byte, 4)
+	binary.LittleEndian.PutUint32(data, uint32(n))
+	return data
+}
+
+func EncodeBoolean(b bool) []byte {
+	if b {
+		return []byte{1}
+	}
+	return []byte{0}
+}
+
+func Encode(a any) ([]byte, error) {
 	switch v := a.(type) {
-	case *ByteValue:
+	case bool:
+		if v {
+			return []byte{1}, nil
+		}
+		return []byte{0}, nil
+	}
+	return nil, fmt.Errorf("failed to encode: unknown valuetype")
+}
+
+// ToInt extracts an integer offset from an Allocatable value.
+// Supports byte, short, int, and long types.
+func ToInt(a Allocatable) (int, error) {
+	switch v := a.(type) {
+	case *Byte:
 		return int(v.Data()), nil
-	case *ShortValue:
+	case *Short:
 		return int(v.Data()), nil
-	case *IntegerValue:
+	case *Integer:
 		return int(v.Data()), nil
-	case *LongValue:
+	case *Long:
 		return int(v.Data()), nil
 	default:
 		return 0, fmt.Errorf("cannot convert %s to integer offset", a.Type())
 	}
 }
 
-// Wrap creates an Allocable value that views the given byte slice.
+// Wrap creates an Allocatable value that views the given byte slice.
 // The returned value does not copy data — it reads and writes through the slice directly.
 // The caller must ensure the slice remains valid for the lifetime of the value.
-func Wrap(tag TypeTag, view []byte) (Allocable, error) {
+func Wrap(tag TypeTag, view []byte) (Allocatable, error) {
 	switch tag {
 	case TagByte:
 		return NewByte(view), nil

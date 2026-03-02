@@ -7,6 +7,9 @@ import (
 
 	"github.com/mwantia/vega/cmd/vega/cli"
 
+	// Import built-in extension registrations
+	_ "github.com/mwantia/vega/pkg/extension"
+
 	// Import VFS drivers
 	_ "github.com/mwantia/vfs/mount/service/consul"
 	_ "github.com/mwantia/vfs/mount/service/ephemeral"

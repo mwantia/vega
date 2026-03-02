@@ -18,17 +18,19 @@ const (
 	OpFieldSTORE   // pop expr stack, copy into field (arg: slot ID, offset: field byte offset, extra: type tag, size: field size)
 	OpFieldLOAD    // load field from slot (arg: slot ID, offset: field byte offset, extra: type tag, size: field size)
 
-	OpCallNAT // call a registered native (Go) function (name: function name, arg: argument count)
-	OpCallFN  // call a user-defined (Vega) function (name: function name, arg: argument count)
-	OpReturn  // return from user function (extra: 0=void, 1=has return value)
+	OpCall   // call a function by name (name: function name, arg: argument count, extra: 0=statement 1=expression)
+	OpReturn // return from user function (extra: 0=void, 1=has return value)
 	OpLoadArg // push a pending primitive argument onto the expr stack (arg: argument index)
 
-	OpVarLoadRaw     // push stencil slot bytes as a RawValue (arg: slot ID, offset: total size)
+	OpVarLoadRaw     // push stencil slot bytes as a Raw (arg: slot ID, offset: total size)
 	OpLoadArgStencil // restore a stencil arg from pending args into a new slot (arg: pending index, extra: slot ID, offset: total size)
 
 	OpPtrLOAD // pop offset from expr stack, read tag-typed value from allocator, push result (extra: type tag)
 
 	OpBuildSTRING // pop N values, call String() on each, concat, push heap SliceValue (arg: N)
+
+	OpGetMember  // pop value, get named member via Memberable interface (offset: name index in Names[])
+	OpCallMethod // pop argc args then pop object, call method via Methodable interface (offset: name index in Names[], arg: argc)
 )
 
 var operationNames = map[OperationCode]string{
@@ -46,9 +48,8 @@ var operationNames = map[OperationCode]string{
 	OpFieldSTORE:   "FIELD_STORE",
 	OpFieldLOAD:    "FIELD_LOAD",
 
-	OpCallNAT: "CALL_NAT",
-	OpCallFN:  "CALL_FN",
-	OpReturn:  "RETURN",
+	OpCall:   "CALL",
+	OpReturn: "RETURN",
 	OpLoadArg: "LOAD_ARG",
 
 	OpVarLoadRaw:     "VAR_LOAD_RAW",
@@ -57,6 +58,9 @@ var operationNames = map[OperationCode]string{
 	OpPtrLOAD: "PTR_LOAD",
 
 	OpBuildSTRING: "BUILD_STRING",
+
+	OpGetMember:  "GET_MEMBER",
+	OpCallMethod: "CALL_METHOD",
 }
 
 func (op OperationCode) String() string {
