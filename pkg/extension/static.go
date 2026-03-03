@@ -5,54 +5,44 @@ import (
 	"strings"
 
 	"github.com/mwantia/vega/pkg/descriptor"
-	"github.com/mwantia/vega/pkg/value"
+	"github.com/mwantia/vega/pkg/slot"
 )
 
 func init() {
 	descriptor.Global.RegisterStatic(&descriptor.MethodDescriptor{
 		Name:      "print",
 		Params:    nil, // variadic: accepts any number of any-typed arguments
-		ReturnTag: value.TagVoid,
-		Run: func(inst value.Value, session descriptor.DescriptorSession, args []value.Value) (value.Value, error) {
+		ReturnTag: slot.TagVoid,
+		Run: func(inst slot.StackSlot, session descriptor.DescriptorSession, args []slot.StackSlot) (slot.StackSlot, error) {
 			var out strings.Builder
 			for _, arg := range args {
-				s := arg.String()
-				out.WriteString(s)
+				out.WriteString(arg.Format())
 			}
 			_, err := fmt.Fprintln(session.Stdout(), out.String())
-			return nil, err
+			return slot.VoidSlot, err
 		},
 	})
 
 	descriptor.Global.RegisterStatic(&descriptor.MethodDescriptor{
 		Name: "string",
 		Params: []descriptor.ParameterLayoutDescriptor{
-			{
-				Name:     "value",
-				Tag:      value.TagAny,
-				Position: 0,
-				Required: true,
-			},
+			{Name: "value", Tag: slot.TagAny, Position: 0, Required: true},
 		},
-		ReturnTag: value.TagSlice,
-		Run: func(inst value.Value, session descriptor.DescriptorSession, args []value.Value) (value.Value, error) {
-			return value.NewSlice([]byte(args[0].String())), nil
+		ReturnTag: slot.TagSlice,
+		Run: func(inst slot.StackSlot, session descriptor.DescriptorSession, args []slot.StackSlot) (slot.StackSlot, error) {
+			return slot.NewString(args[0].Format()), nil
 		},
 	})
 
 	descriptor.Global.RegisterStatic(&descriptor.MethodDescriptor{
 		Name: "type",
 		Params: []descriptor.ParameterLayoutDescriptor{
-			{
-				Name:     "value",
-				Tag:      value.TagAny,
-				Position: 0,
-				Required: true,
-			},
+			{Name: "value", Tag: slot.TagAny, Position: 0, Required: true},
 		},
-		ReturnTag: value.TagSlice,
-		Run: func(inst value.Value, session descriptor.DescriptorSession, args []value.Value) (value.Value, error) {
-			return value.NewSlice([]byte(args[0].Type())), nil
+		ReturnTag: slot.TagSlice,
+		Run: func(inst slot.StackSlot, session descriptor.DescriptorSession, args []slot.StackSlot) (slot.StackSlot, error) {
+			name, _ := slot.NameForTag(args[0].Tag)
+			return slot.NewString(name), nil
 		},
 	})
 }

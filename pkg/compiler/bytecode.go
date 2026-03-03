@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mwantia/vega/pkg/value"
+	"github.com/mwantia/vega/pkg/slot"
 )
 
 // Constant holds a pre-encoded value for the constant pool.
 type Constant struct {
-	Tag  value.TypeTag
+	Tag  slot.TypeTag
 	Data []byte
 }
 
@@ -34,7 +34,7 @@ func (b *ByteCode) Disassemble() string {
 	if len(b.Constants) > 0 {
 		sb.WriteString("=== Constants ===\n")
 		for i, c := range b.Constants {
-			if name, ok := value.NameForTag(c.Tag); ok {
+			if name, ok := slot.NameForTag(c.Tag); ok {
 				hex := hex.EncodeToString(c.Data)
 				fmt.Fprintf(&sb, "%4d: %s (%s)\n", i, hex, name)
 			}
@@ -63,7 +63,7 @@ func (b *ByteCode) Disassemble() string {
 		if len(fn.ByteCode.Constants) > 0 {
 			sb.WriteString("=== Constants ===\n")
 			for i, c := range fn.ByteCode.Constants {
-				if cname, ok := value.NameForTag(c.Tag); ok {
+				if cname, ok := slot.NameForTag(c.Tag); ok {
 					fmt.Fprintf(&sb, "%4d: %s (%s)\n", i, hex.EncodeToString(c.Data), cname)
 				}
 			}

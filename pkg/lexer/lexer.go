@@ -141,10 +141,19 @@ func (l *Lexer) Next() (Token, error) {
 			Position: pos,
 		}
 	case '|':
-		token = Token{
-			Type:     PIPE,
-			Literal:  "|",
-			Position: pos,
+		if l.PeekChar() == '|' {
+			l.ReadChar()
+			token = Token{
+				Type:     OR,
+				Literal:  "||",
+				Position: pos,
+			}
+		} else {
+			token = Token{
+				Type:     PIPE,
+				Literal:  "|",
+				Position: pos,
+			}
 		}
 	case '/':
 		token = Token{

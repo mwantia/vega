@@ -7,14 +7,14 @@ import (
 
 	"github.com/mwantia/vega/pkg/descriptor"
 	"github.com/mwantia/vega/pkg/parser"
-	"github.com/mwantia/vega/pkg/value"
+	"github.com/mwantia/vega/pkg/slot"
 )
 
 // Preallocated boolean constants — shared across all compilations to avoid
 // per-literal []byte allocations (AddConstant deduplicates by value).
 var (
-	boolConstTrue  = Constant{Tag: value.TagBoolean, Data: []byte{1}}
-	boolConstFalse = Constant{Tag: value.TagBoolean, Data: []byte{0}}
+	boolConstTrue  = Constant{Tag: slot.TagBoolean, Data: []byte{1}}
+	boolConstFalse = Constant{Tag: slot.TagBoolean, Data: []byte{0}}
 )
 
 type Compiler struct {
@@ -97,16 +97,16 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 				stencil.Fields = append(stencil.Fields, StencilFieldLayout{
 					Name:     f.Name,
 					Offset:   offset,
-					Tag:      value.TagSlice,
+					Tag:      slot.TagSlice,
 					Capacity: f.Capacity,
 				})
 				offset += f.Capacity
 			} else {
-				tag, ok := value.TagForName(f.Type)
+				tag, ok := slot.TagForName(f.Type)
 				if !ok {
 					return fmt.Errorf("struct '%s': unknown type '%s' for field '%s'", s.Name, f.Type, f.Name)
 				}
-				size := value.SizeForTag(tag)
+				size := slot.SizeForTag(tag)
 				if size == 0 {
 					return fmt.Errorf("struct '%s': type '%s' for field '%s' requires an explicit capacity (use %s<N>)", s.Name, f.Type, f.Name, f.Type)
 				}
@@ -151,9 +151,9 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 				return fmt.Errorf("function '%s': parameter '%s' type must be an identifier",
 					s.Name.Value, p.Value)
 			}
-			if tag, ok := value.TagForName(ident.Value); ok {
+			if tag, ok := slot.TagForName(ident.Value); ok {
 				// Primitive type parameter (int, long, float, …)
-				mask := value.MaskForTag(tag)
+				mask := slot.MaskForTag(tag)
 				params[i] = ParamDefinition{Name: p.Value, Tag: tag, Mask: mask}
 			} else if stencil, ok := c.stencils[ident.Value]; ok {
 				// Struct type parameter
@@ -180,7 +180,7 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 		defer func() { c.scope = oldScope }()
 
 		// For each parameter: pull from the pending-args buffer, allocate a slot,
-		// and store the value. Primitive and struct params use different sequences.
+		// and store the slot. Primitive and struct params use different sequences.
 		for i, param := range params {
 			if param.Stencil != nil {
 				// Struct parameter: allocate a stencil slot and bulk-copy the raw bytes.
@@ -217,7 +217,7 @@ func (c *Compiler) compileStatement(b *ByteCode, statement parser.Statement) err
 		for _, instr := range fnCode.Instructions {
 			switch instr.Operation {
 			case OpVarALLOC:
-				frameSize += value.MaxSizeForMask(instr.Extra)
+				frameSize += slot.MaxSizeForMask(instr.Extra)
 			case OpSliceALLOC, OpStencilALLOC, OpLoadArgStencil:
 				frameSize += instr.Offset
 			}
@@ -274,14 +274,14 @@ func (c *Compiler) compilePointerAssignment(b *ByteCode, s *parser.AssignmentSta
 		return fmt.Errorf("failed to compile pointer offset: %v", err)
 	}
 
-	tag, ok := value.TagForName(ptrExpr.TypeName)
+	tag, ok := slot.TagForName(ptrExpr.TypeName)
 	if !ok {
 		return fmt.Errorf("unknown type name '%s' in pointer", ptrExpr.TypeName)
 	}
 
 	name := s.Name.Value
 	if _, exists := c.scope.Lookup(name); !exists {
-		mask := value.MaskForTag(tag)
+		mask := slot.MaskForTag(tag)
 		c.scope.Define(name, tag, mask)
 	}
 
@@ -313,7 +313,7 @@ func (c *Compiler) compileScalarAssignment(b *ByteCode, s *parser.AssignmentStat
 			b.EmitField(OpSliceALLOC, info.SlotID, capacity, 0, s.Position().Line)
 		}
 		// Emit the constant and store into the (possibly pre-existing) slot.
-		c.emitConst(b, value.TagSlice, []byte(strExpr.Value), s.Position().Line)
+		c.emitConst(b, slot.TagSlice, []byte(strExpr.Value), s.Position().Line)
 		info, _ := c.scope.Lookup(name)
 		b.EmitArg(OpVarSTORE, info.SlotID, s.Position().Line)
 		return nil
@@ -326,13 +326,13 @@ func (c *Compiler) compileScalarAssignment(b *ByteCode, s *parser.AssignmentStat
 
 	// Non-literal slice values (e.g. BUILD_STRING result) require an explicit
 	// capacity declaration so the allocator knows how large a slot to reserve.
-	if rhsTag == value.TagSlice {
+	if rhsTag == slot.TagSlice {
 		return fmt.Errorf("string assignment to '%s' requires an explicit capacity: use `%s: string<N> = ...`", name, name)
 	}
 
 	if _, exists := c.scope.Lookup(name); !exists {
 		var mask byte
-		var inferredTag value.TypeTag
+		var inferredTag slot.TypeTag
 
 		if len(s.Constraints) > 0 {
 			mask, err = c.resolveConstraintMask(s.Constraints)
@@ -342,7 +342,7 @@ func (c *Compiler) compileScalarAssignment(b *ByteCode, s *parser.AssignmentStat
 			inferredTag = rhsTag
 		} else {
 			inferredTag = rhsTag
-			mask = value.MaskForTag(rhsTag)
+			mask = slot.MaskForTag(rhsTag)
 		}
 
 		info := c.scope.Define(name, inferredTag, mask)
@@ -364,7 +364,7 @@ func (c *Compiler) compileSliceAssignment(b *ByteCode, s *parser.AssignmentState
 	if err != nil {
 		return fmt.Errorf("failed to compile slice assignment value: %v", err)
 	}
-	if rhsTag != value.TagSlice {
+	if rhsTag != slot.TagSlice {
 		return fmt.Errorf("type mismatch: '%s' declared as %s<%d> but right-hand side is not a slice value", name, st.TypeName, st.Capacity)
 	}
 
@@ -399,7 +399,7 @@ func (c *Compiler) compileStructAssignment(b *ByteCode, s *parser.AssignmentStat
 			return fmt.Errorf("failed to compile struct field '%s': %v", fieldName, err)
 		}
 
-		if field.Tag == value.TagSlice {
+		if field.Tag == slot.TagSlice {
 			b.EmitFieldSize(OpFieldSTORE, info.SlotID, field.Offset, byte(field.Tag), field.Capacity, s.Position().Line)
 		} else {
 			b.EmitField(OpFieldSTORE, info.SlotID, field.Offset, byte(field.Tag), s.Position().Line)
@@ -426,7 +426,7 @@ func (c *Compiler) compileTupleAssignment(b *ByteCode, s *parser.AssignmentState
 			Offset: offset,
 			Tag:    tag,
 		})
-		offset += value.SizeForTag(tag)
+		offset += slot.SizeForTag(tag)
 	}
 	stencil.TotalSize = offset
 
@@ -456,51 +456,51 @@ func (c *Compiler) emitStencilInit(b *ByteCode, name string, stencil *StencilDef
 }
 
 // emitConst adds a typed constant to the pool and emits OpLoadCONST.
-func (c *Compiler) emitConst(b *ByteCode, tag value.TypeTag, data []byte, line int) {
+func (c *Compiler) emitConst(b *ByteCode, tag slot.TypeTag, data []byte, line int) {
 	idx := b.AddConstant(Constant{Tag: tag, Data: data})
 	b.EmitArg(OpLoadCONST, idx, line)
 }
 
-func (c *Compiler) compileExpression(b *ByteCode, expr parser.Expression) (value.TypeTag, error) {
+func (c *Compiler) compileExpression(b *ByteCode, expr parser.Expression) (slot.TypeTag, error) {
 	switch e := expr.(type) {
 	case *parser.ByteExpression:
-		c.emitConst(b, value.TagByte, []byte{e.Value}, e.Position().Line)
-		return value.TagByte, nil
+		c.emitConst(b, slot.TagByte, []byte{e.Value}, e.Position().Line)
+		return slot.TagByte, nil
 	case *parser.ShortExpression:
 		data := make([]byte, 2)
 		binary.LittleEndian.PutUint16(data, uint16(e.Value))
-		c.emitConst(b, value.TagShort, data, e.Position().Line)
-		return value.TagShort, nil
+		c.emitConst(b, slot.TagShort, data, e.Position().Line)
+		return slot.TagShort, nil
 	case *parser.IntegerExpression:
 		data := make([]byte, 4)
 		binary.LittleEndian.PutUint32(data, uint32(e.Value))
-		c.emitConst(b, value.TagInteger, data, e.Position().Line)
-		return value.TagInteger, nil
+		c.emitConst(b, slot.TagInteger, data, e.Position().Line)
+		return slot.TagInteger, nil
 	case *parser.LongExpression:
 		data := make([]byte, 8)
 		binary.LittleEndian.PutUint64(data, uint64(e.Value))
-		c.emitConst(b, value.TagLong, data, e.Position().Line)
-		return value.TagLong, nil
+		c.emitConst(b, slot.TagLong, data, e.Position().Line)
+		return slot.TagLong, nil
 	case *parser.FloatExpression:
 		data := make([]byte, 4)
 		binary.LittleEndian.PutUint32(data, math.Float32bits(e.Value))
-		c.emitConst(b, value.TagFloat, data, e.Position().Line)
-		return value.TagFloat, nil
+		c.emitConst(b, slot.TagFloat, data, e.Position().Line)
+		return slot.TagFloat, nil
 	case *parser.DecimalExpression:
 		data := make([]byte, 8)
 		binary.LittleEndian.PutUint64(data, math.Float64bits(e.Value))
-		c.emitConst(b, value.TagDecimal, data, e.Position().Line)
-		return value.TagDecimal, nil
+		c.emitConst(b, slot.TagDecimal, data, e.Position().Line)
+		return slot.TagDecimal, nil
 	case *parser.BooleanExpression:
 		bc := boolConstFalse
 		if e.Value {
 			bc = boolConstTrue
 		}
 		c.emitConst(b, bc.Tag, bc.Data, e.Position().Line)
-		return value.TagBoolean, nil
+		return slot.TagBoolean, nil
 	case *parser.StringExpression:
-		c.emitConst(b, value.TagSlice, []byte(e.Value), e.Position().Line)
-		return value.TagSlice, nil
+		c.emitConst(b, slot.TagSlice, []byte(e.Value), e.Position().Line)
+		return slot.TagSlice, nil
 	case *parser.InterpolatedExpression:
 		for _, part := range e.Parts {
 			if _, err := c.compileExpression(b, part); err != nil {
@@ -508,7 +508,7 @@ func (c *Compiler) compileExpression(b *ByteCode, expr parser.Expression) (value
 			}
 		}
 		b.EmitArg(OpBuildSTRING, len(e.Parts), e.Position().Line)
-		return value.TagSlice, nil
+		return slot.TagSlice, nil
 	case *parser.NilExpression:
 		return 0, fmt.Errorf("nil literals are not allocable")
 	case *parser.IdentifierExpression:
@@ -527,8 +527,8 @@ func (c *Compiler) compileExpression(b *ByteCode, expr parser.Expression) (value
 	case *parser.PointerExpression:
 		// Inline pointer dereference used as an expression: *type(offset)
 		// Compile the offset, then emit OpPtrLOAD so the VM reads directly
-		// from the allocator at that offset and pushes the value.
-		tag, ok := value.TagForName(e.TypeName)
+		// from the allocator at that offset and pushes the slot.
+		tag, ok := slot.TagForName(e.TypeName)
 		if !ok {
 			return 0, fmt.Errorf("unknown type name '%s' in pointer expression", e.TypeName)
 		}
@@ -547,7 +547,7 @@ func (c *Compiler) compileExpression(b *ByteCode, expr parser.Expression) (value
 				if !ok {
 					return 0, fmt.Errorf("struct '%s' has no field '%s'", info.Stencil.Name, fieldName)
 				}
-				if field.Tag == value.TagSlice {
+				if field.Tag == slot.TagSlice {
 					b.EmitFieldSize(OpFieldLOAD, info.SlotID, field.Offset, byte(field.Tag), field.Capacity, e.Position().Line)
 				} else {
 					b.EmitField(OpFieldLOAD, info.SlotID, field.Offset, byte(field.Tag), e.Position().Line)
@@ -617,6 +617,80 @@ func (c *Compiler) compileExpression(b *ByteCode, expr parser.Expression) (value
 		}
 		return 0, nil
 
+	case *parser.GroupedExpression:
+		// Parenthesized expression — just compile the inner expression.
+		return c.compileExpression(b, e.Expr)
+
+	case *parser.InfixExpression:
+		leftTag, err := c.compileExpression(b, e.Left)
+		if err != nil {
+			return 0, fmt.Errorf("infix left: %w", err)
+		}
+		if _, err := c.compileExpression(b, e.Right); err != nil {
+			return 0, fmt.Errorf("infix right: %w", err)
+		}
+		line := e.Position().Line
+		switch e.Operator {
+		case "+":
+			b.Emit(OpBinAdd, line)
+			return leftTag, nil
+		case "-":
+			b.Emit(OpBinSub, line)
+			return leftTag, nil
+		case "*":
+			b.Emit(OpBinMul, line)
+			return leftTag, nil
+		case "/":
+			b.Emit(OpBinDiv, line)
+			return leftTag, nil
+		case "%":
+			b.Emit(OpBinMod, line)
+			return leftTag, nil
+		case "==":
+			b.Emit(OpCmpEQ, line)
+			return slot.TagBoolean, nil
+		case "!=":
+			b.Emit(OpCmpNE, line)
+			return slot.TagBoolean, nil
+		case "<":
+			b.Emit(OpCmpLT, line)
+			return slot.TagBoolean, nil
+		case "<=":
+			b.Emit(OpCmpLE, line)
+			return slot.TagBoolean, nil
+		case ">":
+			b.Emit(OpCmpGT, line)
+			return slot.TagBoolean, nil
+		case ">=":
+			b.Emit(OpCmpGE, line)
+			return slot.TagBoolean, nil
+		case "&&":
+			b.Emit(OpLogAnd, line)
+			return slot.TagBoolean, nil
+		case "||":
+			b.Emit(OpLogOr, line)
+			return slot.TagBoolean, nil
+		default:
+			return 0, fmt.Errorf("unknown infix operator '%s'", e.Operator)
+		}
+
+	case *parser.PrefixExpression:
+		tag, err := c.compileExpression(b, e.Right)
+		if err != nil {
+			return 0, fmt.Errorf("prefix operand: %w", err)
+		}
+		line := e.Position().Line
+		switch e.Operator {
+		case "-":
+			b.Emit(OpUnNeg, line)
+			return tag, nil
+		case "!":
+			b.Emit(OpLogNot, line)
+			return slot.TagBoolean, nil
+		default:
+			return 0, fmt.Errorf("unknown prefix operator '%s'", e.Operator)
+		}
+
 	default:
 		return 0, fmt.Errorf("unknown expression type: %T", e)
 	}
@@ -627,11 +701,11 @@ func (c *Compiler) resolveConstraintMask(constraints []parser.Expression) (byte,
 	for _, constraint := range constraints {
 		switch ct := constraint.(type) {
 		case *parser.IdentifierExpression:
-			tag, ok := value.TagForName(ct.Value)
+			tag, ok := slot.TagForName(ct.Value)
 			if !ok {
 				return 0, fmt.Errorf("unknown type name '%s'", ct.Value)
 			}
-			mask |= value.MaskForTag(tag)
+			mask |= slot.MaskForTag(tag)
 		case *parser.SliceTypeExpression:
 			return 0, fmt.Errorf("slice type '%s<%d>' cannot be used in a union type constraint", ct.TypeName, ct.Capacity)
 		default:
@@ -644,28 +718,28 @@ func (c *Compiler) resolveConstraintMask(constraints []parser.Expression) (byte,
 // inferTypeTag determines the TypeTag of an expression without emitting bytecode.
 // It is called only from compileTupleAssignment for stencil pre-scanning, where
 // type information must be known before any code is emitted.
-func (c *Compiler) inferTypeTag(expr parser.Expression) (value.TypeTag, error) {
+func (c *Compiler) inferTypeTag(expr parser.Expression) (slot.TypeTag, error) {
 	switch expr := expr.(type) {
 	case *parser.ByteExpression:
-		return value.TagByte, nil
+		return slot.TagByte, nil
 	case *parser.ShortExpression:
-		return value.TagShort, nil
+		return slot.TagShort, nil
 	case *parser.IntegerExpression:
-		return value.TagInteger, nil
+		return slot.TagInteger, nil
 	case *parser.LongExpression:
-		return value.TagLong, nil
+		return slot.TagLong, nil
 	case *parser.FloatExpression:
-		return value.TagFloat, nil
+		return slot.TagFloat, nil
 	case *parser.DecimalExpression:
-		return value.TagDecimal, nil
+		return slot.TagDecimal, nil
 	case *parser.BooleanExpression:
-		return value.TagBoolean, nil
+		return slot.TagBoolean, nil
 	case *parser.StringExpression:
-		return value.TagSlice, nil // string literals are slice-typed; capacity must be declared
+		return slot.TagSlice, nil // string literals are slice-typed; capacity must be declared
 	case *parser.InterpolatedExpression:
-		return value.TagSlice, nil
+		return slot.TagSlice, nil
 	case *parser.PointerExpression:
-		tag, ok := value.TagForName(expr.TypeName)
+		tag, ok := slot.TagForName(expr.TypeName)
 		if !ok {
 			return 0, fmt.Errorf("unknown type name '%s' in pointer", expr.TypeName)
 		}
@@ -687,8 +761,22 @@ func (c *Compiler) inferTypeTag(expr parser.Expression) (value.TypeTag, error) {
 			return 0, fmt.Errorf("struct '%s' has no field '%s'", info.Stencil.Name, expr.Attribute.Value)
 		}
 		return 0, fmt.Errorf("cannot infer type from attribute expression")
+	case *parser.GroupedExpression:
+		return c.inferTypeTag(expr.Expr)
 	case *parser.MethodCallExpression:
 		return 0, fmt.Errorf("cannot infer type from method call (use explicit type annotation)")
+	case *parser.InfixExpression:
+		switch expr.Operator {
+		case "==", "!=", "<", "<=", ">", ">=", "&&", "||":
+			return slot.TagBoolean, nil
+		default:
+			return c.inferTypeTag(expr.Left)
+		}
+	case *parser.PrefixExpression:
+		if expr.Operator == "!" {
+			return slot.TagBoolean, nil
+		}
+		return c.inferTypeTag(expr.Right)
 	default:
 		return 0, fmt.Errorf("cannot infer type from expression %T", expr)
 	}

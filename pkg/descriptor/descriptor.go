@@ -3,13 +3,13 @@ package descriptor
 import (
 	"fmt"
 
-	"github.com/mwantia/vega/pkg/value"
+	"github.com/mwantia/vega/pkg/slot"
 )
 
 // FieldLayoutDescriptor describes one field in a registered struct type.
 type FieldLayoutDescriptor struct {
 	Name     string
-	Tag      value.TypeTag
+	Tag      slot.TypeTag
 	Offset   int
 	Capacity int // > 0 for slice fields
 }
@@ -57,14 +57,15 @@ func (s *StencilDescriptor) LookupMethod(name string) (MethodDescriptor, bool) {
 // required ones.
 type ParameterLayoutDescriptor struct {
 	Name     string
-	Tag      value.TypeTag
+	Tag      slot.TypeTag
 	Position int
-	Default  value.Value // non-nil for optional parameters
+	Default  slot.StackSlot // Tag==TagVoid means "no default" (use slot.VoidSlot)
 	Required bool
 }
 
-// MethodDescriptorRuntime
-type MethodDescriptorRuntime func(value.Value, DescriptorSession, []value.Value) (value.Value, error)
+// MethodDescriptorRuntime is the function signature for all native method and
+// static function implementations. The receiver slot is VoidSlot for statics.
+type MethodDescriptorRuntime func(slot.StackSlot, DescriptorSession, []slot.StackSlot) (slot.StackSlot, error)
 
 // MethodDescriptor describes a method callable on a value of a given TypeTag.
 // ReturnTag is used by the compiler for type inference at the call site;
@@ -77,15 +78,15 @@ type MethodDescriptorRuntime func(value.Value, DescriptorSession, []value.Value)
 type MethodDescriptor struct {
 	Name      string
 	Params    []ParameterLayoutDescriptor
-	ReturnTag value.TypeTag
+	ReturnTag slot.TypeTag
 	Run       MethodDescriptorRuntime
 }
 
 // ValidateArgs validates args against the descriptor's Params, fills in
 // Default values for absent optional parameters, and returns a normalised
-// slice of exactly len(Params) entries (nil where an optional was omitted
+// slice of exactly len(Params) entries (VoidSlot where an optional was omitted
 // and has no Default). When Params is nil the args are returned unchanged.
-func (m *MethodDescriptor) ValidateArgs(args []value.Value) ([]value.Value, error) {
+func (m *MethodDescriptor) ValidateArgs(args []slot.StackSlot) ([]slot.StackSlot, error) {
 	if m.Params == nil {
 		return args, nil
 	}
@@ -103,39 +104,38 @@ func (m *MethodDescriptor) ValidateArgs(args []value.Value) ([]value.Value, erro
 		return nil, fmt.Errorf("'%s' expects at most %d argument(s), got %d", m.Name, len(m.Params), len(args))
 	}
 
-	result := make([]value.Value, len(m.Params))
+	result := make([]slot.StackSlot, len(m.Params))
 	for i, p := range m.Params {
 		if i < len(args) {
 			arg := args[i]
-			if p.Tag != value.TagAny {
-				if alloc, ok := arg.(value.Allocatable); ok {
-					if got := value.TagFor(alloc); got != p.Tag {
-						wantName, _ := value.NameForTag(p.Tag)
-						return nil, fmt.Errorf("'%s' parameter '%s': expected %s, got %s",
-							m.Name, p.Name, wantName, arg.Type())
-					}
-				}
+			if p.Tag != slot.TagAny && arg.Tag != p.Tag {
+				wantName, _ := slot.NameForTag(p.Tag)
+				gotName, _ := slot.NameForTag(arg.Tag)
+				return nil, fmt.Errorf("'%s' parameter '%s': expected %s, got %s",
+					m.Name, p.Name, wantName, gotName)
 			}
 			result[i] = arg
+		} else if p.Default.Tag != slot.TagVoid {
+			result[i] = p.Default
 		} else {
-			result[i] = p.Default // nil for absent optional with no Default set
+			result[i] = slot.VoidSlot // absent optional with no Default
 		}
 	}
 	return result, nil
 }
 
-// MemberDescriptorGetter
-type MemberDescriptorGetter func(value.Value) (value.Value, error)
+// MemberDescriptorGetter retrieves a named property from a slot receiver.
+type MemberDescriptorGetter func(slot.StackSlot) (slot.StackSlot, error)
 
-// MemberDescriptorSetter
-type MemberDescriptorSetter func(value.Value, value.Value) error
+// MemberDescriptorSetter writes a named property on a slot receiver.
+type MemberDescriptorSetter func(slot.StackSlot, slot.StackSlot) error
 
 // MemberDescriptor describes a named property readable (and optionally
 // writable) on a value of a given TypeTag.
 type MemberDescriptor struct {
 	Name      string
 	Readonly  bool
-	ReturnTag value.TypeTag
+	ReturnTag slot.TypeTag
 	Getter    MemberDescriptorGetter
 	Setter    MemberDescriptorSetter
 }

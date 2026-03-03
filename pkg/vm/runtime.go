@@ -8,14 +8,14 @@ import (
 	"github.com/mwantia/vega/pkg/alloc"
 	"github.com/mwantia/vega/pkg/compiler"
 	"github.com/mwantia/vega/pkg/descriptor"
-	"github.com/mwantia/vega/pkg/value"
+	"github.com/mwantia/vega/pkg/slot"
 )
 
 type SlotEntry struct {
 	Offset      int
 	Capacity    int // bytes currently accessible in the allocator for this slot
 	DeclaredCap int // declared capacity from string<N>; non-zero for TagSlice slots
-	Tag         value.TypeTag
+	Tag         slot.TypeTag
 	Mask        byte
 	Alive       bool
 	Alias       bool // true = manually positioned pointer or slice view, not allocator-owned
@@ -33,9 +33,9 @@ type Runtime struct {
 	session   *RuntimeSession
 
 	// pendingArgs holds arguments passed to the currently-being-entered user
-	// function. They are consumed by OpLoadArg instructions in the function
+	// function. They are consumed by OpLoadArg/OpLoadArgStencil in the function
 	// prologue and cleared once the call is fully set up.
-	pendingArgs []value.Value
+	pendingArgs []slot.StackSlot
 
 	// userFuncs is the table of compiled user-defined functions populated from
 	// the program's ByteCode.Functions before execution begins.
@@ -80,7 +80,7 @@ func (r *Runtime) ExecuteFrames(ctx context.Context) error {
 				return nil
 			}
 			// Implicit void return — clean up and restore caller state.
-			if err := r.doReturn(frame, false, nil); err != nil {
+			if err := r.doReturn(frame, false, slot.StackSlot{}); err != nil {
 				return err
 			}
 			continue
@@ -102,13 +102,18 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if r.exprStack == nil {
 			return fmt.Errorf("instr 'OpLoadCONST': undefined stack")
 		}
-		// Wrap the constant's data slice as a view-based value.
-		// The value reads directly from the constants table — no copy.
-		val, err := value.Wrap(c.Tag, c.Data)
-		if err != nil {
-			return fmt.Errorf("instr 'OpLoadCONST': %w", err)
+		var s slot.StackSlot
+		s.Tag = c.Tag
+		if c.Tag == slot.TagSlice {
+			// String/slice constants live in the ByteCode constants table.
+			// Store a reference to the slice (no copy) — HeapVal points to
+			// the constants table backing, which outlives any stack slot.
+			s.HeapVal = c.Data
+		} else {
+			size := slot.SizeForTag(c.Tag)
+			copy(s.Data[:size], c.Data)
 		}
-		r.exprStack.Push(val)
+		r.exprStack.Push(s)
 
 	case compiler.OpStackPOP:
 		if r.exprStack == nil {
@@ -121,7 +126,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 	case compiler.OpVarALLOC:
 		slotID := instr.Argument
 		mask := instr.Extra
-		size := value.MaxSizeForMask(mask)
+		size := slot.MaxSizeForMask(mask)
 
 		if r.allocator == nil {
 			return fmt.Errorf("instr 'OpVarALLOC': no allocator active")
@@ -165,63 +170,58 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if slotID >= len(r.slots) || !r.slots[slotID].Alive {
 			return fmt.Errorf("instr 'OpVarSTORE': slot %d is not alive", slotID)
 		}
-
 		if r.exprStack == nil {
 			return fmt.Errorf("instr 'OpVarSTORE': undefined stack")
 		}
 
-		val, err := r.exprStack.Pop()
+		s, err := r.exprStack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpVarSTORE': %w", err)
 		}
 
-		alloc, ok := val.(value.Allocatable)
-		if !ok {
-			return fmt.Errorf("instr 'OpVarSTORE': value is not allocable")
+		tag := s.Tag
+		sl := &r.slots[slotID]
+		if !slot.TagInMask(tag, sl.Mask) {
+			return fmt.Errorf("instr 'OpVarSTORE': type mismatch: slot mask %08b does not allow tag %d", sl.Mask, tag)
 		}
+		sl.Tag = tag
 
-		tag := value.TagFor(alloc)
-		slot := &r.slots[slotID]
-		if !value.TagInMask(tag, slot.Mask) {
-			return fmt.Errorf("instr 'OpVarSTORE': type mismatch: slot mask %08b does not allow tag %d", slot.Mask, tag)
-		}
-		slot.Tag = tag
+		if tag == slot.TagSlice {
+			var srcOff int
+			var srcView []byte
+			if s.HeapVal != nil {
+				srcView = s.HeapVal
+				srcOff = -1
+			} else {
+				ref := s.GetSliceRef()
+				srcOff = int(ref.Offset)
+				srcView = r.allocator.Slice(srcOff, int(ref.Length))
+			}
 
-		// For slice values, check whether the source is already backed by the
-		// allocator. If so, make this slot a view alias instead of copying —
-		// preserving Go-style slice sharing semantics.
-		if tag == value.TagSlice {
-			src := alloc.(*value.Slice)
-			srcOff := src.AllocOffset()
-			srcLen := len(src.View())
-
-			if srcOff >= 0 && !slot.InRegion {
+			if srcOff >= 0 && !sl.InRegion {
 				// Source lives in the allocator — make an alias, no copy.
-				if !slot.Alias {
-					// Free the pre-allocated owned memory before aliasing.
-					r.allocator.Free(slot.Offset, slot.Capacity)
+				if !sl.Alias {
+					r.allocator.Free(sl.Offset, sl.Capacity)
 				}
-				slot.Offset = srcOff
-				slot.Capacity = srcLen
-				slot.Alias = true
+				sl.Offset = srcOff
+				sl.Capacity = len(srcView)
+				sl.Alias = true
 			} else {
 				// Source is heap/constant or in a frame region — must copy.
-				if slot.Alias {
-					// Slot is currently a view alias; allocate owned memory using
-					// the declared capacity so we have a writable destination.
-					newOff, err := r.allocator.Alloc(slot.DeclaredCap)
+				if sl.Alias {
+					newOff, err := r.allocator.Alloc(sl.DeclaredCap)
 					if err != nil {
 						return fmt.Errorf("instr 'OpVarSTORE': %w", err)
 					}
-					slot.Offset = newOff
-					slot.Capacity = slot.DeclaredCap
-					slot.Alias = false
+					sl.Offset = newOff
+					sl.Capacity = sl.DeclaredCap
+					sl.Alias = false
 				}
-				if srcLen > slot.Capacity {
-					return fmt.Errorf("instr 'OpVarSTORE': slice value (%d bytes) exceeds slot capacity (%d bytes)", srcLen, slot.Capacity)
+				if len(srcView) > sl.Capacity {
+					return fmt.Errorf("instr 'OpVarSTORE': slice value (%d bytes) exceeds slot capacity (%d bytes)", len(srcView), sl.Capacity)
 				}
-				dest := r.allocator.Slice(slot.Offset, slot.Capacity)
-				n := copy(dest, src.View())
+				dest := r.allocator.Slice(sl.Offset, sl.Capacity)
+				n := copy(dest, srcView)
 				for i := n; i < len(dest); i++ {
 					dest[i] = 0
 				}
@@ -229,10 +229,10 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return nil
 		}
 
-		// Non-slice: copy the value's backing bytes into the alloc buffer.
-		src := alloc.View()
-		dest := r.allocator.Slice(slot.Offset, slot.Capacity)
-		n := copy(dest, src)
+		// Non-slice: copy inline bytes into the allocator buffer.
+		size := slot.SizeForTag(tag)
+		dest := r.allocator.Slice(sl.Offset, sl.Capacity)
+		n := copy(dest, s.Data[:size])
 		for i := n; i < len(dest); i++ {
 			dest[i] = 0
 		}
@@ -243,32 +243,27 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpVarLOAD': use after free on slot %d", slotID)
 		}
 
-		slot := r.slots[slotID]
-		if slot.Tag == 0 {
+		sl := r.slots[slotID]
+		if sl.Tag == 0 {
 			return fmt.Errorf("instr 'OpVarLOAD': slot %d is uninitialized", slotID)
 		}
-
 		if r.exprStack == nil {
 			return fmt.Errorf("instr 'OpVarLOAD': undefined stack")
 		}
 
-		// Create a view-based value that points directly into the alloc buffer.
-		// No copy — the value reads from the allocator's memory.
-		// For slices, use NewSliceAllocView so that SubSlice can propagate the
-		// allocator offset and OpVarSTORE can detect view assignments.
-		var val value.Allocatable
-		if slot.Tag == value.TagSlice {
-			view := r.allocator.Slice(slot.Offset, slot.Capacity)
-			val = value.NewSliceAllocView(view, slot.Offset)
+		var s slot.StackSlot
+		s.Tag = sl.Tag
+		if sl.Tag == slot.TagSlice {
+			// Allocator-backed slice: encode as SliceRef (no heap alloc).
+			s.PutSliceRef(slot.SliceRef{
+				Offset: uint32(sl.Offset),
+				Length: uint32(sl.Capacity),
+			})
 		} else {
-			view := r.allocator.Slice(slot.Offset, value.SizeForTag(slot.Tag))
-			var err error
-			val, err = value.Wrap(slot.Tag, view)
-			if err != nil {
-				return fmt.Errorf("instr 'OpVarLOAD': %w", err)
-			}
+			size := slot.SizeForTag(sl.Tag)
+			copy(s.Data[:size], r.allocator.Slice(sl.Offset, size))
 		}
-		r.exprStack.Push(val)
+		r.exprStack.Push(s)
 
 	case compiler.OpVarFREE:
 		slotID := instr.Argument
@@ -276,21 +271,16 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpVarFREE': double free on slot %d", slotID)
 		}
 
-		slot := r.slots[slotID]
-		if slot.Alias {
-			if slot.Tag != value.TagSlice {
-				// Pointer aliases (non-slice) are not freeable — their lifetime
-				// is managed by the owning slot.
+		sl := r.slots[slotID]
+		if sl.Alias {
+			if sl.Tag != slot.TagSlice {
 				return fmt.Errorf("instr 'OpVarFREE': cannot free pointer alias on slot %d", slotID)
 			}
-			// Slice view aliases don't own their backing memory — just mark dead.
 			r.slots[slotID].Alive = false
 			return nil
 		}
-		if !slot.InRegion {
-			// Region slots are owned by the frame and freed atomically at frame
-			// exit — do not return them to the global allocator individually.
-			r.allocator.Free(slot.Offset, slot.Capacity)
+		if !sl.InRegion {
+			r.allocator.Free(sl.Offset, sl.Capacity)
 		}
 		r.slots[slotID].Alive = false
 
@@ -328,32 +318,27 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			Offset:      offset,
 			Capacity:    capacity,
 			DeclaredCap: capacity,
-			Tag:         0, // uninitialized until first OpVarSTORE
-			Mask:        value.MaskForTag(value.TagSlice),
+			Tag:         0,
+			Mask:        slot.MaskForTag(slot.TagSlice),
 			Alive:       true,
 			InRegion:    inRegion,
 		}
 
 	case compiler.OpVarPTR:
 		slotID := instr.Argument
-		tag := value.TypeTag(instr.Extra)
-		size := value.SizeForTag(tag)
+		tag := slot.TypeTag(instr.Extra)
+		size := slot.SizeForTag(tag)
 
 		if r.exprStack == nil {
 			return fmt.Errorf("instr 'OpVarPTR': undefined stack")
 		}
 
-		val, err := r.exprStack.Pop()
+		s, err := r.exprStack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpVarPTR': %w", err)
 		}
 
-		alloc, ok := val.(value.Allocatable)
-		if !ok {
-			return fmt.Errorf("instr 'OpVarPTR': offset value is not allocable")
-		}
-
-		offset, err := value.ToInt(alloc)
+		offset, err := s.AsInt()
 		if err != nil {
 			return fmt.Errorf("instr 'OpVarPTR': %w", err)
 		}
@@ -363,10 +348,9 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		}
 
 		if offset < 0 || offset+size > r.allocator.Size() {
-			return fmt.Errorf("instr 'OpVarPTR': pointer out of bounds (offset=%d, size=%d, size=%d)", offset, size, r.allocator.Size())
+			return fmt.Errorf("instr 'OpVarPTR': pointer out of bounds (offset=%d, size=%d, allocSize=%d)", offset, size, r.allocator.Size())
 		}
 
-		// Grow slot table if needed
 		for len(r.slots) <= slotID {
 			r.slots = append(r.slots, SlotEntry{})
 		}
@@ -374,7 +358,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			Offset:   offset,
 			Capacity: size,
 			Tag:      tag,
-			Mask:     value.MaskForTag(tag),
+			Mask:     slot.MaskForTag(tag),
 			Alive:    true,
 			Alias:    true,
 		}
@@ -421,7 +405,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 	case compiler.OpFieldSTORE:
 		slotID := instr.Argument
 		fieldOffset := instr.Offset
-		tag := value.TypeTag(instr.Extra)
+		tag := slot.TypeTag(instr.Extra)
 
 		if slotID >= len(r.slots) || !r.slots[slotID].Alive {
 			return fmt.Errorf("instr 'OpFieldSTORE': slot %d is not alive", slotID)
@@ -430,28 +414,34 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpFieldSTORE': undefined stack")
 		}
 
-		val, err := r.exprStack.Pop()
+		s, err := r.exprStack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpFieldSTORE': %w", err)
 		}
 
-		alloc, ok := val.(value.Allocatable)
-		if !ok {
-			return fmt.Errorf("instr 'OpFieldSTORE': value is not allocable")
+		if s.Tag != tag {
+			return fmt.Errorf("instr 'OpFieldSTORE': type mismatch: expected tag %d, got %d", tag, s.Tag)
 		}
 
-		actualTag := value.TagFor(alloc)
-		if actualTag != tag {
-			return fmt.Errorf("instr 'OpFieldSTORE': type mismatch: expected tag %d, got %d", tag, actualTag)
-		}
-
-		slot := r.slots[slotID]
+		sl := r.slots[slotID]
 		fieldSize := fieldSizeFor(tag, instr.Size)
-		src := alloc.View()
-		if tag == value.TagSlice && len(src) > fieldSize {
-			return fmt.Errorf("instr 'OpFieldSTORE': slice value (%d bytes) exceeds field capacity (%d bytes)", len(src), fieldSize)
+
+		var src []byte
+		if tag == slot.TagSlice {
+			if s.HeapVal != nil {
+				src = s.HeapVal
+			} else {
+				ref := s.GetSliceRef()
+				src = r.allocator.Slice(int(ref.Offset), int(ref.Length))
+			}
+			if len(src) > fieldSize {
+				return fmt.Errorf("instr 'OpFieldSTORE': slice value (%d bytes) exceeds field capacity (%d bytes)", len(src), fieldSize)
+			}
+		} else {
+			src = s.Data[:fieldSize]
 		}
-		dest := r.allocator.Slice(slot.Offset+fieldOffset, fieldSize)
+
+		dest := r.allocator.Slice(sl.Offset+fieldOffset, fieldSize)
 		n := copy(dest, src)
 		for i := n; i < len(dest); i++ {
 			dest[i] = 0
@@ -460,7 +450,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 	case compiler.OpFieldLOAD:
 		slotID := instr.Argument
 		fieldOffset := instr.Offset
-		tag := value.TypeTag(instr.Extra)
+		tag := slot.TypeTag(instr.Extra)
 
 		if slotID >= len(r.slots) || !r.slots[slotID].Alive {
 			return fmt.Errorf("instr 'OpFieldLOAD': slot %d is not alive", slotID)
@@ -469,14 +459,21 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpFieldLOAD': undefined stack")
 		}
 
-		slot := r.slots[slotID]
+		sl := r.slots[slotID]
 		fieldSize := fieldSizeFor(tag, instr.Size)
-		view := r.allocator.Slice(slot.Offset+fieldOffset, fieldSize)
-		val, err := value.Wrap(tag, view)
-		if err != nil {
-			return fmt.Errorf("instr 'OpFieldLOAD': %w", err)
+
+		var s slot.StackSlot
+		s.Tag = tag
+		if tag == slot.TagSlice {
+			s.PutSliceRef(slot.SliceRef{
+				Offset: uint32(sl.Offset + fieldOffset),
+				Length: uint32(fieldSize),
+			})
+		} else {
+			view := r.allocator.Slice(sl.Offset+fieldOffset, fieldSize)
+			copy(s.Data[:fieldSize], view)
 		}
-		r.exprStack.Push(val)
+		r.exprStack.Push(s)
 
 	case compiler.OpCall:
 		name := frame.ByteCode.Names[instr.Offset]
@@ -484,13 +481,13 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		exprCall := instr.Extra == 1
 
 		// Pop arguments left-to-right from the current expr stack.
-		args := make([]value.Value, argc)
+		args := make([]slot.StackSlot, argc)
 		for i := argc - 1; i >= 0; i-- {
-			val, err := r.exprStack.Pop()
+			s, err := r.exprStack.Pop()
 			if err != nil {
 				return fmt.Errorf("instr 'OpCall' ('%s'): %w", name, err)
 			}
-			args[i] = val
+			args[i] = s
 		}
 
 		// User-defined functions take priority over native functions.
@@ -500,24 +497,21 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 					name, len(fn.Params), argc)
 			}
 
-			// Save the caller's expression stack and slot table inside the current
-			// frame so that doReturn can restore them when the function exits.
+			// Save the caller's expression stack and slot table.
 			currentFrame := r.IndexedFrame()
 			currentFrame.savedExprStack = r.exprStack
 			currentFrame.savedSlots = r.slots
 
-			// Initialize fresh expression stack and slot table for the callee.
+			// Initialize fresh state for the callee.
 			r.exprStack = &ExprStack{}
 			r.slots = make([]SlotEntry, 0)
 			r.pendingArgs = args
 
-			// Push new call frame.
 			r.Index++
 			if r.Index >= MaxFrames {
 				return fmt.Errorf("instr 'OpCall': call stack overflow")
 			}
 
-			// Pre-allocate a contiguous region for all fixed-size locals.
 			var regionOffset, regionSize, bumpPtr int
 			if fn.FrameSize > 0 {
 				off, err := r.allocator.Alloc(fn.FrameSize)
@@ -546,41 +540,40 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpCall': unknown function '%s'", name)
 		}
 
+		// Materialize any TagSlice args before passing to native code.
+		for i := range args {
+			args[i] = r.materializeSlot(args[i])
+		}
+
 		args, err := desc.ValidateArgs(args)
 		if err != nil {
 			return fmt.Errorf("instr 'OpCall' ('%s'): %w", name, err)
 		}
 
-		result, err := desc.Run(nil, r.session, args)
+		result, err := desc.Run(slot.VoidSlot, r.session, args)
 		if err != nil {
 			return fmt.Errorf("instr 'OpCall' ('%s'): %w", name, err)
 		}
-		if exprCall && desc.ReturnTag != value.TagVoid {
-			if result == nil {
-				return fmt.Errorf("instr 'OpCall' ('%s'): empty result received during exprcall", name)
-			}
-
+		if exprCall && desc.ReturnTag != slot.TagVoid {
 			r.exprStack.Push(result)
 		}
 
 	case compiler.OpReturn:
 		if r.Index == 0 {
-			// Returning from the top-level program is a no-op; execution will
-			// stop naturally when IP reaches the end of the main bytecode.
 			return nil
 		}
 
 		hasValue := instr.Extra == 1
-		var retVal value.Value
+		var retSlot slot.StackSlot
 		if hasValue && r.exprStack != nil {
-			val, err := r.exprStack.Pop()
+			var err error
+			retSlot, err = r.exprStack.Pop()
 			if err != nil {
 				return fmt.Errorf("instr 'OpReturn': %w", err)
 			}
-			retVal = val
 		}
 
-		if err := r.doReturn(r.IndexedFrame(), hasValue, retVal); err != nil {
+		if err := r.doReturn(r.IndexedFrame(), hasValue, retSlot); err != nil {
 			return fmt.Errorf("instr 'OpReturn': %w", err)
 		}
 
@@ -606,14 +599,19 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpVarLoadRaw': expr stack not initialised")
 		}
 
-		slot := r.slots[slotID]
-		data := make([]byte, size)
-		copy(data, r.allocator.Slice(slot.Offset, size))
-		r.exprStack.Push(&value.Raw{Data: data})
+		sl := r.slots[slotID]
+		// Push a stencil ref — no heap copy on the fast path.
+		var s slot.StackSlot
+		s.Tag = slot.TagStencilRef
+		s.PutSliceRef(slot.SliceRef{
+			Offset: uint32(sl.Offset),
+			Length: uint32(size),
+		})
+		r.exprStack.Push(s)
 
 	case compiler.OpPtrLOAD:
-		tag := value.TypeTag(instr.Extra)
-		size := value.SizeForTag(tag)
+		tag := slot.TypeTag(instr.Extra)
+		size := slot.SizeForTag(tag)
 
 		if r.exprStack == nil {
 			return fmt.Errorf("instr 'OpPtrLOAD': undefined stack")
@@ -622,31 +620,25 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpPtrLOAD': no allocator active")
 		}
 
-		val, err := r.exprStack.Pop()
+		s, err := r.exprStack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpPtrLOAD': %w", err)
 		}
 
-		alloc, ok := val.(value.Allocatable)
-		if !ok {
-			return fmt.Errorf("instr 'OpPtrLOAD': offset value is not allocable")
-		}
-
-		offset, err := value.ToInt(alloc)
+		offset, err := s.AsInt()
 		if err != nil {
 			return fmt.Errorf("instr 'OpPtrLOAD': %w", err)
 		}
 
 		if offset < 0 || offset+size > r.allocator.Size() {
-			return fmt.Errorf("instr 'OpPtrLOAD': pointer out of bounds (offset=%d, size=%d, size=%d)", offset, size, r.allocator.Size())
+			return fmt.Errorf("instr 'OpPtrLOAD': pointer out of bounds (offset=%d, size=%d, allocSize=%d)", offset, size, r.allocator.Size())
 		}
 
 		view := r.allocator.Slice(offset, size)
-		loaded, err := value.Wrap(tag, view)
-		if err != nil {
-			return fmt.Errorf("instr 'OpPtrLOAD': %w", err)
-		}
-		r.exprStack.Push(loaded)
+		var result slot.StackSlot
+		result.Tag = tag
+		copy(result.Data[:size], view)
+		r.exprStack.Push(result)
 
 	case compiler.OpLoadArgStencil:
 		argIdx := instr.Argument
@@ -661,11 +653,12 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpLoadArgStencil': no allocator active")
 		}
 
-		raw, ok := r.pendingArgs[argIdx].(*value.Raw)
-		if !ok {
-			return fmt.Errorf("instr 'OpLoadArgStencil': expected Raw for struct arg, got %T",
-				r.pendingArgs[argIdx])
+		pending := r.pendingArgs[argIdx]
+		if pending.Tag != slot.TagStencilRef {
+			return fmt.Errorf("instr 'OpLoadArgStencil': expected stencil ref for struct arg, got tag %d",
+				pending.Tag)
 		}
+		ref := pending.GetSliceRef()
 
 		var offset int
 		var inRegion bool
@@ -696,7 +689,8 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			InRegion: inRegion,
 		}
 
-		copy(r.allocator.Slice(offset, size), raw.Data)
+		// Copy from caller's allocator region (still alive — freed only at doReturn).
+		copy(r.allocator.Slice(offset, size), r.allocator.Slice(int(ref.Offset), int(ref.Length)))
 
 	case compiler.OpBuildSTRING:
 		n := instr.Argument
@@ -705,33 +699,32 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		}
 		parts := make([]string, n)
 		for i := n - 1; i >= 0; i-- {
-			v, err := r.exprStack.Pop()
+			s, err := r.exprStack.Pop()
 			if err != nil {
 				return fmt.Errorf("instr 'OpBuildSTRING': stack underflow")
 			}
-			parts[i] = v.String()
+			parts[i] = r.slotString(s)
 		}
-		r.exprStack.Push(value.NewSlice([]byte(strings.Join(parts, ""))))
+		result := strings.Join(parts, "")
+		r.exprStack.Push(slot.NewString(result))
 
 	case compiler.OpGetMember:
 		name := frame.ByteCode.Names[instr.Offset]
 		if r.exprStack == nil {
 			return fmt.Errorf("instr 'OpGetMember': undefined stack")
 		}
-		val, err := r.exprStack.Pop()
+		s, err := r.exprStack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpGetMember': %w", err)
 		}
-		alloc, ok := val.(value.Allocatable)
-		if !ok {
-			return fmt.Errorf("instr 'OpGetMember': value of type '%s' is not allocable", val.Type())
-		}
-		tag := value.TagFor(alloc)
+
+		tag := s.Tag
 		desc, ok := descriptor.Global.LookupMember(tag, name)
 		if !ok {
-			return fmt.Errorf("instr 'OpGetMember': value of type '%s' has no member '%s'", val.Type(), name)
+			return fmt.Errorf("instr 'OpGetMember': value of tag %d has no member '%s'", tag, name)
 		}
-		result, err := desc.Getter(val)
+
+		result, err := desc.Getter(r.materializeSlot(s))
 		if err != nil {
 			return fmt.Errorf("instr 'OpGetMember' ('%s'): %w", name, err)
 		}
@@ -743,41 +736,256 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if r.exprStack == nil {
 			return fmt.Errorf("instr 'OpCallMethod': undefined stack")
 		}
-		args := make([]value.Value, argc)
+
+		argSlots := make([]slot.StackSlot, argc)
 		for i := argc - 1; i >= 0; i-- {
-			v, err := r.exprStack.Pop()
+			s, err := r.exprStack.Pop()
 			if err != nil {
 				return fmt.Errorf("instr 'OpCallMethod': %w", err)
 			}
-			args[i] = v
+			argSlots[i] = s
 		}
-		obj, err := r.exprStack.Pop()
+
+		objSlot, err := r.exprStack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCallMethod': %w", err)
 		}
-		alloc, ok := obj.(value.Allocatable)
-		if !ok {
-			return fmt.Errorf("instr 'OpCallMethod': value of type '%s' is not allocable", obj.Type())
-		}
-		tag := value.TagFor(alloc)
+
+		tag := objSlot.Tag
 		desc, ok := descriptor.Global.LookupMethod(tag, name)
 		if !ok {
-			return fmt.Errorf("instr 'OpCallMethod': value of type '%s' has no method '%s'", obj.Type(), name)
+			return fmt.Errorf("instr 'OpCallMethod': value of tag %d has no method '%s'", tag, name)
 		}
-		args, err = desc.ValidateArgs(args)
+
+		// Materialize receiver and any TagSlice args before native boundary.
+		objSlot = r.materializeSlot(objSlot)
+		for i := range argSlots {
+			argSlots[i] = r.materializeSlot(argSlots[i])
+		}
+
+		argSlots, err = desc.ValidateArgs(argSlots)
 		if err != nil {
 			return fmt.Errorf("instr 'OpCallMethod' ('%s'): %w", name, err)
 		}
-		result, err := desc.Run(obj, r.session, args)
+
+		result, err := desc.Run(objSlot, r.session, argSlots)
 		if err != nil {
 			return fmt.Errorf("instr 'OpCallMethod' ('%s'): %w", name, err)
 		}
-		// Push nil sentinel for void methods so OpStackPOP in statement context works.
-		if result != nil {
-			r.exprStack.Push(result)
-		} else {
-			r.exprStack.Push(value.NilSingleton)
+
+		// Push result (VoidSlot for void methods) so OpStackPOP in statement context always succeeds.
+		r.exprStack.Push(result)
+
+	// ── Arithmetic ────────────────────────────────────────────────────────────
+
+	case compiler.OpBinAdd:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinAdd': %w", err)
 		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinAdd': %w", err)
+		}
+		result, err := addSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinAdd': %w", err)
+		}
+		r.exprStack.Push(result)
+
+	case compiler.OpBinSub:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinSub': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinSub': %w", err)
+		}
+		result, err := subSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinSub': %w", err)
+		}
+		r.exprStack.Push(result)
+
+	case compiler.OpBinMul:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinMul': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinMul': %w", err)
+		}
+		result, err := mulSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinMul': %w", err)
+		}
+		r.exprStack.Push(result)
+
+	case compiler.OpBinDiv:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinDiv': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinDiv': %w", err)
+		}
+		result, err := divSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinDiv': %w", err)
+		}
+		r.exprStack.Push(result)
+
+	case compiler.OpBinMod:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinMod': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinMod': %w", err)
+		}
+		result, err := modSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpBinMod': %w", err)
+		}
+		r.exprStack.Push(result)
+
+	case compiler.OpUnNeg:
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpUnNeg': %w", err)
+		}
+		result, err := negSlot(a)
+		if err != nil {
+			return fmt.Errorf("instr 'OpUnNeg': %w", err)
+		}
+		r.exprStack.Push(result)
+
+	// ── Comparison ───────────────────────────────────────────────────────────
+
+	case compiler.OpCmpEQ:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpEQ': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpEQ': %w", err)
+		}
+		cmp, err := cmpSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpEQ': %w", err)
+		}
+		r.exprStack.Push(slot.NewBool(cmp == 0))
+
+	case compiler.OpCmpNE:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpNE': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpNE': %w", err)
+		}
+		cmp, err := cmpSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpNE': %w", err)
+		}
+		r.exprStack.Push(slot.NewBool(cmp != 0))
+
+	case compiler.OpCmpLT:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpLT': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpLT': %w", err)
+		}
+		cmp, err := cmpSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpLT': %w", err)
+		}
+		r.exprStack.Push(slot.NewBool(cmp < 0))
+
+	case compiler.OpCmpLE:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpLE': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpLE': %w", err)
+		}
+		cmp, err := cmpSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpLE': %w", err)
+		}
+		r.exprStack.Push(slot.NewBool(cmp <= 0))
+
+	case compiler.OpCmpGT:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpGT': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpGT': %w", err)
+		}
+		cmp, err := cmpSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpGT': %w", err)
+		}
+		r.exprStack.Push(slot.NewBool(cmp > 0))
+
+	case compiler.OpCmpGE:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpGE': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpGE': %w", err)
+		}
+		cmp, err := cmpSlots(a, b)
+		if err != nil {
+			return fmt.Errorf("instr 'OpCmpGE': %w", err)
+		}
+		r.exprStack.Push(slot.NewBool(cmp >= 0))
+
+	// ── Logical ──────────────────────────────────────────────────────────────
+
+	case compiler.OpLogAnd:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpLogAnd': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpLogAnd': %w", err)
+		}
+		r.exprStack.Push(slot.NewBool(a.Data[0] != 0 && b.Data[0] != 0))
+
+	case compiler.OpLogOr:
+		b, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpLogOr': %w", err)
+		}
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpLogOr': %w", err)
+		}
+		r.exprStack.Push(slot.NewBool(a.Data[0] != 0 || b.Data[0] != 0))
+
+	case compiler.OpLogNot:
+		a, err := r.exprStack.Pop()
+		if err != nil {
+			return fmt.Errorf("instr 'OpLogNot': %w", err)
+		}
+		r.exprStack.Push(slot.NewBool(a.Data[0] == 0))
 	}
 
 	return nil
@@ -785,42 +993,34 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 
 // doReturn tears down the current function frame and restores the caller's
 // runtime state. If hasValue is true and the frame was entered from an
-// expression context, retVal is pushed onto the restored caller stack.
+// expression context, retSlot is pushed onto the restored caller stack.
 //
-// Before freeing the function's slots, the return value is materialized
-// (copied) so that it remains valid after the backing memory is returned
-// to the global allocator.
-func (r *Runtime) doReturn(frame *CallFrame, hasValue bool, retVal value.Value) error {
-	// Materialize the return value before freeing slots, so it doesn't point
-	// into memory that is about to be returned to the allocator.
-	var materializedRet value.Value
-	if hasValue && retVal != nil {
-		if a, ok := retVal.(value.Allocatable); ok {
-			src := a.View()
-			data := make([]byte, len(src))
-			copy(data, src)
-			wrapped, err := value.Wrap(value.TagFor(a), data)
-			if err == nil {
-				materializedRet = wrapped
-			} else {
-				materializedRet = retVal // fallback: keep the view (may be stale)
-			}
-		} else {
-			materializedRet = retVal
+// Allocator-backed slice return values are materialized (copied to heap)
+// before the frame's slots are freed so they remain valid.
+func (r *Runtime) doReturn(frame *CallFrame, hasValue bool, retSlot slot.StackSlot) error {
+	// Materialize allocator-backed slices/stencil refs before freeing slots.
+	if hasValue {
+		if retSlot.Tag == slot.TagSlice && retSlot.HeapVal == nil {
+			ref := retSlot.GetSliceRef()
+			data := make([]byte, ref.Length)
+			copy(data, r.allocator.Slice(int(ref.Offset), int(ref.Length)))
+			retSlot.HeapVal = data
+		} else if retSlot.Tag == slot.TagStencilRef {
+			ref := retSlot.GetSliceRef()
+			data := make([]byte, ref.Length)
+			copy(data, r.allocator.Slice(int(ref.Offset), int(ref.Length)))
+			retSlot.HeapVal = data
 		}
 	}
 
 	// Free slots that are NOT part of the frame region individually.
-	// Region slots are batch-freed below. Alias slots are never freed.
 	for _, slot := range r.slots {
 		if slot.Alive && !slot.Alias && !slot.InRegion {
 			r.allocator.Free(slot.Offset, slot.Capacity)
 		}
 	}
 
-	// Release the entire frame region with a single allocator call. This
-	// replaces the per-slot loop for all fixed-size locals and coalesces
-	// cleanly with adjacent free blocks in the global free list.
+	// Release the entire frame region atomically.
 	if frame.RegionSize > 0 {
 		r.allocator.Free(frame.RegionOffset, frame.RegionSize)
 	}
@@ -835,7 +1035,7 @@ func (r *Runtime) doReturn(frame *CallFrame, hasValue bool, retVal value.Value) 
 
 	// Push return value only when the call site expected one.
 	if hasValue && frame.ExprCall && r.exprStack != nil {
-		r.exprStack.Push(materializedRet)
+		r.exprStack.Push(retSlot)
 	}
 
 	return nil
@@ -848,9 +1048,9 @@ func (r *Runtime) IndexedFrame() *CallFrame {
 // fieldSizeFor returns the byte width of a struct field.
 // For scalar fields the size is derived from the type tag; for TagSlice fields
 // the compiler encodes the declared capacity in the instruction's Size field.
-func fieldSizeFor(tag value.TypeTag, instrSize int) int {
-	if tag == value.TagSlice {
+func fieldSizeFor(tag slot.TypeTag, instrSize int) int {
+	if tag == slot.TagSlice {
 		return instrSize
 	}
-	return value.SizeForTag(tag)
+	return slot.SizeForTag(tag)
 }

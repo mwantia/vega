@@ -3,44 +3,44 @@ package vm
 import (
 	"fmt"
 
-	"github.com/mwantia/vega/pkg/value"
+	"github.com/mwantia/vega/pkg/slot"
 )
 
 // ExprStack holds temporary values during expression evaluation.
-// Values on this stack are view-based — they reference data in the alloc buffer
-// or the constants table, not independent copies.
+// Values on this stack are self-contained StackSlots — scalars live inline
+// with zero heap allocation on the hot path.
 type ExprStack struct {
-	data []value.Value
+	data []slot.StackSlot
 }
 
-// Push appends a value onto the stack.
-func (s *ExprStack) Push(val value.Value) {
-	s.data = append(s.data, val)
+// Push appends a slot onto the stack.
+func (s *ExprStack) Push(slot slot.StackSlot) {
+	s.data = append(s.data, slot)
 }
 
-// Pop removes and returns the top value from the stack.
-func (s *ExprStack) Pop() (value.Value, error) {
+// Pop removes and returns the top slot from the stack.
+func (s *ExprStack) Pop() (slot.StackSlot, error) {
 	n := len(s.data)
 	if n == 0 {
-		return nil, fmt.Errorf("stack underflow")
+		return slot.StackSlot{}, fmt.Errorf("stack underflow")
 	}
 
-	val := s.data[n-1]
+	slot := s.data[n-1]
 	s.data = s.data[:n-1]
-	return val, nil
+	return slot, nil
 }
 
-// Peek returns the top value without removing it.
-func (s *ExprStack) Peek() (value.Value, error) {
+// Peek returns the top slot without removing it.
+func (s *ExprStack) Peek() (slot.StackSlot, error) {
 	n := len(s.data)
 	if n == 0 {
-		return nil, fmt.Errorf("stack underflow")
+		return slot.StackSlot{}, fmt.Errorf("stack underflow")
 	}
 
 	return s.data[n-1], nil
 }
 
-// Len returns the number of values on the stack.
+// Len returns the number of slots on the stack.
 func (s *ExprStack) Len() int {
 	return len(s.data)
 }

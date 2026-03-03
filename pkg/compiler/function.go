@@ -1,6 +1,6 @@
 package compiler
 
-import "github.com/mwantia/vega/pkg/value"
+import "github.com/mwantia/vega/pkg/slot"
 
 // ParamDefinition describes a single function parameter: its name, slot ID within
 // the function's alloc buffer, and its type constraints.
@@ -8,7 +8,7 @@ import "github.com/mwantia/vega/pkg/value"
 type ParamDefinition struct {
 	Name    string
 	SlotID  int
-	Tag     value.TypeTag
+	Tag     slot.TypeTag
 	Mask    byte
 	Stencil *StencilDefinition // non-nil for struct-typed parameters
 }
@@ -35,9 +35,9 @@ type StencilDefinition struct {
 // FieldLayout describes a single field within a stencil.
 type StencilFieldLayout struct {
 	Name     string
-	Offset   int           // cumulative byte offset within the stencil
-	Tag      value.TypeTag // type tag for this field
-	Capacity int           // byte capacity for TagSlice fields (0 for scalar fields)
+	Offset   int          // cumulative byte offset within the stencil
+	Tag      slot.TypeTag // type tag for this field
+	Capacity int          // byte capacity for TagSlice fields (0 for scalar fields)
 }
 
 // LookupField returns the FieldLayout for the named field, or false.

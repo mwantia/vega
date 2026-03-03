@@ -1,10 +1,10 @@
 package compiler
 
-import "github.com/mwantia/vega/pkg/value"
+import "github.com/mwantia/vega/pkg/slot"
 
 type SymbolInfo struct {
 	SlotID   int
-	Tag      value.TypeTag
+	Tag      slot.TypeTag
 	Mask     byte
 	Capacity int                // byte capacity for TagSlice variables (0 for scalar types)
 	Stencil  *StencilDefinition // non-nil for struct/tuple variables
@@ -27,7 +27,7 @@ func (st *SymbolTable) Lookup(name string) (SymbolInfo, bool) {
 	return info, ok
 }
 
-func (st *SymbolTable) Define(name string, tag value.TypeTag, mask byte) SymbolInfo {
+func (st *SymbolTable) Define(name string, tag slot.TypeTag, mask byte) SymbolInfo {
 	info := SymbolInfo{
 		SlotID: st.nextSlot,
 		Tag:    tag,
@@ -41,8 +41,8 @@ func (st *SymbolTable) Define(name string, tag value.TypeTag, mask byte) SymbolI
 func (st *SymbolTable) DefineSlice(name string, capacity int) SymbolInfo {
 	info := SymbolInfo{
 		SlotID:   st.nextSlot,
-		Tag:      value.TagSlice,
-		Mask:     value.MaskForTag(value.TagSlice),
+		Tag:      slot.TagSlice,
+		Mask:     slot.MaskForTag(slot.TagSlice),
 		Capacity: capacity,
 	}
 	st.symbols[name] = info

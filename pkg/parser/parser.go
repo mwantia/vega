@@ -730,7 +730,7 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 			}, nil
 		}
 
-		if !b.MatchAny(false, lexer.RPAREN) {
+		if !b.MatchAny(true, lexer.RPAREN) {
 			return nil, fmt.Errorf("expected ')', but received '%s'", b.Current().Literal)
 		}
 
@@ -756,6 +756,22 @@ func (p *Parser) makePrefixExpression(b lexer.TokenBuffer) (Expression, error) {
 func (p *Parser) makeInfixExpression(b lexer.TokenBuffer, left Expression) (Expression, error) {
 	token := b.Current()
 	switch token.Type {
+	case lexer.PLUS, lexer.MINUS, lexer.ASTERISK, lexer.SLASH, lexer.PERCENT,
+		lexer.EQUAL, lexer.NOT_EQUAL,
+		lexer.LT, lexer.GT, lexer.LTE, lexer.GTE,
+		lexer.AND, lexer.OR:
+		prec := GetTokenPrecedence(token)
+		b.Read() // consume operator
+		right, err := p.makeExpression(b, prec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse right side of '%s': %v", token.Literal, err)
+		}
+		return &InfixExpression{
+			BaseExpression: BaseExpression{token},
+			Left:           left,
+			Operator:       token.Literal,
+			Right:          right,
+		}, nil
 	case lexer.LPAREN:
 		b.Read() // consume '('
 		args, err := p.makeArgumentList(b)

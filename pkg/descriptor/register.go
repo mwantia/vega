@@ -3,7 +3,7 @@ package descriptor
 import (
 	"sync"
 
-	"github.com/mwantia/vega/pkg/value"
+	"github.com/mwantia/vega/pkg/slot"
 )
 
 var Global DescriptorRegister = NewRegister()
@@ -11,22 +11,22 @@ var Global DescriptorRegister = NewRegister()
 type descriptorRegisterImpl struct {
 	mu sync.RWMutex
 
-	methods  map[value.TypeTag]map[string]*MethodDescriptor
-	members  map[value.TypeTag]map[string]*MemberDescriptor
+	methods  map[slot.TypeTag]map[string]*MethodDescriptor
+	members  map[slot.TypeTag]map[string]*MemberDescriptor
 	stencils map[string]*StencilDescriptor
 	statics  map[string]*MethodDescriptor
 }
 
 func NewRegister() DescriptorRegister {
 	return &descriptorRegisterImpl{
-		methods:  make(map[value.TypeTag]map[string]*MethodDescriptor),
-		members:  make(map[value.TypeTag]map[string]*MemberDescriptor),
+		methods:  make(map[slot.TypeTag]map[string]*MethodDescriptor),
+		members:  make(map[slot.TypeTag]map[string]*MemberDescriptor),
 		stencils: make(map[string]*StencilDescriptor),
 		statics:  make(map[string]*MethodDescriptor),
 	}
 }
 
-func (dr *descriptorRegisterImpl) RegisterMethod(tag value.TypeTag, desc *MethodDescriptor) error {
+func (dr *descriptorRegisterImpl) RegisterMethod(tag slot.TypeTag, desc *MethodDescriptor) error {
 	dr.mu.Lock()
 	defer dr.mu.Unlock()
 
@@ -45,7 +45,7 @@ func (dr *descriptorRegisterImpl) RegisterStatic(desc *MethodDescriptor) error {
 	return nil
 }
 
-func (dr *descriptorRegisterImpl) RegisterMember(tag value.TypeTag, desc *MemberDescriptor) error {
+func (dr *descriptorRegisterImpl) RegisterMember(tag slot.TypeTag, desc *MemberDescriptor) error {
 	dr.mu.Lock()
 	defer dr.mu.Unlock()
 
@@ -64,7 +64,7 @@ func (dr *descriptorRegisterImpl) RegisterStencil(desc *StencilDescriptor) error
 	return nil
 }
 
-func (dr *descriptorRegisterImpl) LookupMethod(tag value.TypeTag, name string) (*MethodDescriptor, bool) {
+func (dr *descriptorRegisterImpl) LookupMethod(tag slot.TypeTag, name string) (*MethodDescriptor, bool) {
 	dr.mu.RLock()
 	defer dr.mu.RUnlock()
 
@@ -83,7 +83,7 @@ func (dr *descriptorRegisterImpl) LookupStatic(name string) (*MethodDescriptor, 
 	return desc, ok
 }
 
-func (dr *descriptorRegisterImpl) LookupMember(tag value.TypeTag, name string) (*MemberDescriptor, bool) {
+func (dr *descriptorRegisterImpl) LookupMember(tag slot.TypeTag, name string) (*MemberDescriptor, bool) {
 	dr.mu.RLock()
 	defer dr.mu.RUnlock()
 

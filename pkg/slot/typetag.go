@@ -1,4 +1,4 @@
-package value
+package slot
 
 // TypeTag identifies the binary encoding format for an allocable value.
 type TypeTag byte
@@ -34,30 +34,6 @@ var tagByName = map[string]TypeTag{
 	"string":  TagSlice,
 	"any":     TagAny,
 	"void":    TagVoid,
-}
-
-// TagFor returns the TypeTag for an Allocatable value.
-func TagFor(a Allocatable) TypeTag {
-	switch a.(type) {
-	case *Short:
-		return TagShort
-	case *Integer:
-		return TagInteger
-	case *Long:
-		return TagLong
-	case *Float:
-		return TagFloat
-	case *Decimal:
-		return TagDecimal
-	case *Boolean:
-		return TagBoolean
-	case *Byte:
-		return TagByte
-	case *Slice:
-		return TagSlice
-	default:
-		return 0
-	}
 }
 
 // TagForName resolves a type name string to its TypeTag.

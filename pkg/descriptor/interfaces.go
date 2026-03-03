@@ -4,24 +4,24 @@ import (
 	"context"
 	"io"
 
-	"github.com/mwantia/vega/pkg/value"
+	"github.com/mwantia/vega/pkg/slot"
 	"github.com/mwantia/vfs"
 )
 
 type DescriptorRegister interface {
-	RegisterMethod(value.TypeTag, *MethodDescriptor) error
+	RegisterMethod(slot.TypeTag, *MethodDescriptor) error
 
 	RegisterStatic(*MethodDescriptor) error
 
-	RegisterMember(value.TypeTag, *MemberDescriptor) error
+	RegisterMember(slot.TypeTag, *MemberDescriptor) error
 
 	RegisterStencil(*StencilDescriptor) error
 
-	LookupMethod(value.TypeTag, string) (*MethodDescriptor, bool)
+	LookupMethod(slot.TypeTag, string) (*MethodDescriptor, bool)
 
 	LookupStatic(string) (*MethodDescriptor, bool)
 
-	LookupMember(value.TypeTag, string) (*MemberDescriptor, bool)
+	LookupMember(slot.TypeTag, string) (*MemberDescriptor, bool)
 
 	LookupStencil(string) (*StencilDescriptor, bool)
 }

@@ -31,6 +31,27 @@ const (
 
 	OpGetMember  // pop value, get named member via Memberable interface (offset: name index in Names[])
 	OpCallMethod // pop argc args then pop object, call method via Methodable interface (offset: name index in Names[], arg: argc)
+
+	// Arithmetic — operate directly on inline StackSlot bytes (zero heap alloc).
+	OpBinAdd // pop b, pop a, push a+b (same tag)
+	OpBinSub // pop b, pop a, push a-b
+	OpBinMul // pop b, pop a, push a*b
+	OpBinDiv // pop b, pop a, push a/b
+	OpBinMod // pop b, pop a, push a%b (integer types only)
+	OpUnNeg  // pop a, push -a
+
+	// Comparison — result is always TagBoolean.
+	OpCmpEQ // pop b, pop a, push (a==b)
+	OpCmpNE // pop b, pop a, push (a!=b)
+	OpCmpLT // pop b, pop a, push (a<b)
+	OpCmpLE // pop b, pop a, push (a<=b)
+	OpCmpGT // pop b, pop a, push (a>b)
+	OpCmpGE // pop b, pop a, push (a>=b)
+
+	// Logical — operands must be TagBoolean.
+	OpLogAnd // pop b, pop a, push (a&&b)
+	OpLogOr  // pop b, pop a, push (a||b)
+	OpLogNot // pop a, push (!a)
 )
 
 var operationNames = map[OperationCode]string{
@@ -61,6 +82,24 @@ var operationNames = map[OperationCode]string{
 
 	OpGetMember:  "GET_MEMBER",
 	OpCallMethod: "CALL_METHOD",
+
+	OpBinAdd: "BIN_ADD",
+	OpBinSub: "BIN_SUB",
+	OpBinMul: "BIN_MUL",
+	OpBinDiv: "BIN_DIV",
+	OpBinMod: "BIN_MOD",
+	OpUnNeg:  "UN_NEG",
+
+	OpCmpEQ: "CMP_EQ",
+	OpCmpNE: "CMP_NE",
+	OpCmpLT: "CMP_LT",
+	OpCmpLE: "CMP_LE",
+	OpCmpGT: "CMP_GT",
+	OpCmpGE: "CMP_GE",
+
+	OpLogAnd: "LOG_AND",
+	OpLogOr:  "LOG_OR",
+	OpLogNot: "LOG_NOT",
 }
 
 func (op OperationCode) String() string {
