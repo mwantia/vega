@@ -2,6 +2,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/mwantia/vega/cmd/vega/cli"
@@ -29,9 +30,10 @@ func main() {
 		Commit:  commit,
 	})
 	root.AddCommand(cli.NewVersionCommand())
+	root.AddCommand(cli.NewCompileCommand())
 
 	if err := root.Execute(); err != nil {
-		println(err)
+		fmt.Println(err)
 		os.Exit(1)
 	}
 }

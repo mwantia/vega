@@ -7,13 +7,8 @@ import (
 	"strings"
 
 	"github.com/mwantia/vega/pkg/compiler"
-	"github.com/mwantia/vega/pkg/lexer"
-	"github.com/mwantia/vega/pkg/parser"
 	"github.com/mwantia/vega/pkg/repl"
 	"github.com/mwantia/vega/pkg/vm"
-	"github.com/mwantia/vfs"
-	"github.com/mwantia/vfs/mount"
-	"github.com/mwantia/vfs/mount/builder"
 	"github.com/spf13/cobra"
 )
 
@@ -39,19 +34,9 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 				uri = strings.TrimSpace(args[0])
 			}
 
-			fs, err := vfs.NewVirtualFileSystem()
+			fs, err := createVirtualFileSystem(uri)
 			if err != nil {
-				return fmt.Errorf("failed to create VFS: %w", err)
-			}
-
-			steps, err := mount.IdentifyMountSteps(ctx, uri)
-			if err != nil {
-				return fmt.Errorf("failed to identify mount for '%s': %w", uri, err)
-			}
-
-			steps = append(steps, builder.AsCascading())
-			if err := fs.Mount(ctx, "/", steps...); err != nil {
-				return fmt.Errorf("failed to mount root: %w", err)
+				return err
 			}
 
 			interactive, _ := cmd.Flags().GetBool("interactive")
@@ -59,36 +44,37 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 
 			var bytecode *compiler.ByteCode
 
-			if script, _ := cmd.Flags().GetString("script"); script != "" {
-				content, err := os.ReadFile(script)
+			file, _ := cmd.Flags().GetString("file")
+			if len(file) > 0 {
+				buf, err := os.ReadFile(file)
 				if err != nil {
-					return fmt.Errorf("failed to read file: %w", err)
+					return fmt.Errorf("failed to read file: %v", err)
 				}
 
-				bytecode, err = compile(string(content))
-				if err != nil {
-					return err
+				if compiler.HasValidMagic(buf[:4]) {
+					bytecode = &compiler.ByteCode{}
+					if err := bytecode.Deserialize(buf); err != nil {
+						return fmt.Errorf("failed to deserialize vgc file: %v", err)
+					}
+				} else {
+					content := string(buf)
+					if bytecode, err = compileFileContent(content); err != nil {
+						return fmt.Errorf("failed to compile content: %v", err)
+					}
+				}
+			} else {
+				if command, _ := cmd.Flags().GetString("command"); command != "" {
+					bytecode, err = compileFileContent(command)
+					if err != nil {
+						return fmt.Errorf("failed to compile content: %v", err)
+					}
 				}
 			}
-
-			if command, _ := cmd.Flags().GetString("command"); command != "" {
-				bytecode, err = compile(command)
-				if err != nil {
-					return err
-				}
-			}
-
-			// trace, _ := cmd.Flags().GetBool("trace")
 
 			vm := vm.NewVM(fs)
 			vm.Stdin(os.Stdin)
 			vm.Stdout(os.Stdout)
 			vm.Stderr(os.Stderr)
-			// defer vm.Shutdown()
-
-			/*if trace {
-				vm.EnableTrace()
-			}*/
 
 			if bytecode != nil {
 				if disasm {
@@ -96,16 +82,10 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 					fmt.Println("=== Execution ===")
 				}
 
-				_, err := vm.Run(ctx, bytecode)
-				if err != nil {
-					/* if trace {
-						fmt.Fprintln(os.Stderr, vm.FormatTrace())
-					} */
+				if _, err := vm.Run(ctx, bytecode); err != nil {
 					return fmt.Errorf("runtime error: %w", err)
 				}
 
-				// vm.SetGlobal("exitcode", value.NewInteger(exitCode))
-				// If interactive is 'false' (default), close immediately to avoid running vega
 				if !interactive {
 					return fs.Shutdown(ctx)
 				}
@@ -119,36 +99,11 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 	// Existing flags
 	cmd.Flags().BoolP("interactive", "i", false, "Keep open after executing (default is 'false')")
 	cmd.Flags().StringP("command", "c", "", "Execute a single Vega command")
-	cmd.Flags().StringP("script", "s", "", "Execute a Vega script file")
+	cmd.Flags().StringP("file", "f", "", "Execute a Vega file")
 	cmd.Flags().BoolP("disasm", "d", false, "Show disassembled bytecode (debug)")
 	cmd.Flags().BoolP("trace", "t", false, "Enable execution tracing (shown on error)")
 	// Set version used by './vega version'
 	cmd.Version = fmt.Sprintf("%s.%s", info.Version, info.Commit)
 
 	return cmd
-}
-
-func compile(input string) (*compiler.ByteCode, error) {
-	l, err := lexer.NewLexer(input)
-	if err != nil {
-		return nil, fmt.Errorf("syntax error: %w", err)
-	}
-	buffer, err := l.Tokenize()
-	if err != nil {
-		return nil, fmt.Errorf("syntax error: %w", err)
-	}
-
-	p := parser.NewParser()
-	program, err := p.MakeProgram(buffer)
-	if err != nil {
-		return nil, fmt.Errorf("parse error: %w", err)
-	}
-
-	c := compiler.NewCompiler()
-	bytecode, err := c.Compile(program)
-	if err != nil {
-		return nil, fmt.Errorf("compile error: %w", err)
-	}
-
-	return bytecode, nil
 }
