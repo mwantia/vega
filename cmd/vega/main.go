@@ -31,6 +31,7 @@ func main() {
 	})
 	root.AddCommand(cli.NewVersionCommand())
 	root.AddCommand(cli.NewCompileCommand())
+	root.AddCommand(cli.NewRunCommand())
 
 	if err := root.Execute(); err != nil {
 		fmt.Println(err)

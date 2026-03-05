@@ -19,9 +19,9 @@ func (r *Runtime) slotString(s slot.StackSlot) string {
 			ref := s.GetSliceRef()
 			view = r.allocator.Slice(int(ref.Offset), int(ref.Length))
 		}
-		n := bytes.IndexByte(view, 0)
-		if n >= 0 {
-			return string(view[:n])
+		before, _, ok := bytes.Cut(view, []byte{0})
+		if ok {
+			return string(before)
 		}
 		return string(view)
 	}

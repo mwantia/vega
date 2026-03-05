@@ -10,12 +10,13 @@ import (
 
 func NewCompileCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:           "compile",
-		Short:         "",
-		Long:          `.`,
-		SilenceErrors: false,
-		SilenceUsage:  true,
-		Args:          cobra.ExactArgs(2),
+		Use:   "compile <input> <output>",
+		Short: "Vega - Virtual Execution & Graph Abstraction",
+		Long: `Vega is a lightweight scripting language and runtime for VFS operations.
+
+It provides a programmable interface between the host OS filesystem and
+VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			inPath := strings.TrimSpace(args[0])
 			outPath := strings.TrimSpace(args[1])
