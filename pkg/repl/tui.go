@@ -447,7 +447,7 @@ func (m *Model) executeAs(label, source string) {
 	}
 
 	// Compiler (persistent across commands to preserve stencils and scope)
-	bytecode, err := m.compiler.Compile(program)
+	bytecode, err := m.compiler.Compile(program, false)
 	if err != nil {
 		m.output[cmdOutputIdx].Duration = time.Since(startTime)
 		m.addOutput(fmt.Sprintf("Compile error: %v", err), OutputError, cmdIdx)

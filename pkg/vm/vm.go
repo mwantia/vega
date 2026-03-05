@@ -10,6 +10,7 @@ import (
 
 	"github.com/mwantia/vega/pkg/alloc"
 	"github.com/mwantia/vega/pkg/compiler"
+	"github.com/mwantia/vega/pkg/slot"
 	"github.com/mwantia/vfs"
 	"github.com/mwantia/vfs/mount"
 )
@@ -114,7 +115,7 @@ func (v *VM) Run(ctx context.Context, bytecode *compiler.ByteCode) (int, error) 
 	runtime := &Runtime{
 		Frames:    make([]*CallFrame, MaxFrames),
 		Index:     0,
-		exprStack: &ExprStack{},
+		stack:     &Stack{},
 		allocator: v.session.allocator,
 		slots:     v.session.slots,
 		session: &RuntimeSession{
@@ -130,8 +131,8 @@ func (v *VM) Run(ctx context.Context, bytecode *compiler.ByteCode) (int, error) 
 		ByteCode: bytecode,
 	}
 
-	if err := runtime.ExecuteFrames(ctx); err != nil {
-		return 1, fmt.Errorf("runtime execution failed: %w", err)
+	if err := v.executeFrames(ctx, runtime); err != nil {
+		return 1, fmt.Errorf("runtime execution failed: %v", err)
 	}
 
 	// Persist updated slots and any newly defined functions.
@@ -139,6 +140,48 @@ func (v *VM) Run(ctx context.Context, bytecode *compiler.ByteCode) (int, error) 
 	maps.Copy(v.session.funcs, bytecode.Functions)
 
 	return 0, nil
+}
+
+func (v *VM) executeFrames(ctx context.Context, r *Runtime) error {
+	for {
+		select {
+		// Check for context cancellation
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			// Continue execution
+		}
+
+		frame := r.IndexedFrame()
+		if frame.InstructionPointer >= len(frame.ByteCode.Instructions) {
+			if r.Index == 0 {
+				return nil
+			}
+			// Implicit void return — clean up and restore caller state.
+			if err := r.doReturn(frame, false, slot.StackSlot{}); err != nil {
+				return err
+			}
+			continue
+		}
+
+		instr := frame.ByteCode.Instructions[frame.InstructionPointer]
+		frame.InstructionPointer++
+
+		op, ok := OperationCodes[instr.Operation]
+		if !ok {
+			// Means the opcode hasn't been found in map[compiler.OperationCode]
+			// TODO :: Fallback to r.ExecuteInstruction and remove after migration
+			if err := r.ExecuteInstruction(instr, frame); err != nil {
+				return fmt.Errorf("line %d: %w", instr.SourceLine, err)
+			}
+
+			continue // return fmt.Errorf("invalid opcode")
+		}
+
+		if err := op.Execute(instr, r); err != nil {
+			return fmt.Errorf("instr '%s': %v", op.Name(), err)
+		}
+	}
 }
 
 // Snapshot implements VirtualMachine.

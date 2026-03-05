@@ -43,6 +43,9 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 				return fmt.Errorf("failed to read file: %v", err)
 			}
 
+			disasm, _ := cmd.Flags().GetBool("disasm")
+			optimize, _ := cmd.Flags().GetBool("optimize")
+
 			var bytecode *compiler.ByteCode
 			if compiler.HasValidMagic(buf[:4]) {
 				bytecode = &compiler.ByteCode{}
@@ -51,7 +54,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 				}
 			} else {
 				content := string(buf)
-				if bytecode, err = compileFileContent(content); err != nil {
+				if bytecode, err = compileFileContent(content, optimize); err != nil {
 					return fmt.Errorf("failed to compile content: %v", err)
 				}
 			}
@@ -60,7 +63,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 				return fmt.Errorf("no bytecode compiled as source")
 			}
 
-			if disasm, _ := cmd.Flags().GetBool("disasm"); disasm {
+			if disasm {
 				fmt.Println(bytecode.Disassemble())
 				fmt.Println("=== Execution ===")
 			}
@@ -79,6 +82,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 	}
 
 	cmd.Flags().BoolP("disasm", "d", false, "Show disassembled bytecode (debug)")
+	cmd.Flags().BoolP("optimize", "o", false, "")
 
 	return cmd
 }

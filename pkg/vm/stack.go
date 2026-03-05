@@ -6,20 +6,20 @@ import (
 	"github.com/mwantia/vega/pkg/slot"
 )
 
-// ExprStack holds temporary values during expression evaluation.
+// Stack holds temporary values during expression evaluation.
 // Values on this stack are self-contained StackSlots — scalars live inline
 // with zero heap allocation on the hot path.
-type ExprStack struct {
+type Stack struct {
 	data []slot.StackSlot
 }
 
 // Push appends a slot onto the stack.
-func (s *ExprStack) Push(slot slot.StackSlot) {
+func (s *Stack) Push(slot slot.StackSlot) {
 	s.data = append(s.data, slot)
 }
 
 // Pop removes and returns the top slot from the stack.
-func (s *ExprStack) Pop() (slot.StackSlot, error) {
+func (s *Stack) Pop() (slot.StackSlot, error) {
 	n := len(s.data)
 	if n == 0 {
 		return slot.StackSlot{}, fmt.Errorf("stack underflow")
@@ -31,7 +31,7 @@ func (s *ExprStack) Pop() (slot.StackSlot, error) {
 }
 
 // Peek returns the top slot without removing it.
-func (s *ExprStack) Peek() (slot.StackSlot, error) {
+func (s *Stack) Peek() (slot.StackSlot, error) {
 	n := len(s.data)
 	if n == 0 {
 		return slot.StackSlot{}, fmt.Errorf("stack underflow")
@@ -41,11 +41,11 @@ func (s *ExprStack) Peek() (slot.StackSlot, error) {
 }
 
 // Len returns the number of slots on the stack.
-func (s *ExprStack) Len() int {
+func (s *Stack) Len() int {
 	return len(s.data)
 }
 
 // Reset clears the stack.
-func (s *ExprStack) Reset() {
+func (s *Stack) Reset() {
 	s.data = s.data[:0]
 }

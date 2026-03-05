@@ -35,7 +35,7 @@ func createVirtualFileSystem(uri string) (vfs.VirtualFileSystem, error) {
 	return fs, nil
 }
 
-func compileFileContent(t string) (*compiler.ByteCode, error) {
+func compileFileContent(t string, optimize bool) (*compiler.ByteCode, error) {
 	l, err := lexer.NewLexer(t)
 	if err != nil {
 		return nil, fmt.Errorf("syntax error: %w", err)
@@ -52,7 +52,7 @@ func compileFileContent(t string) (*compiler.ByteCode, error) {
 	}
 
 	c := compiler.NewCompiler()
-	bytecode, err := c.Compile(program)
+	bytecode, err := c.Compile(program, optimize)
 	if err != nil {
 		return nil, fmt.Errorf("compile error: %w", err)
 	}

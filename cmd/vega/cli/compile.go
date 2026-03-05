@@ -23,6 +23,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 
 			debug, _ := cmd.Flags().GetBool("debug")
 			compress, _ := cmd.Flags().GetBool("compress")
+			optimize, _ := cmd.Flags().GetBool("optimize")
 
 			buf, err := os.ReadFile(inPath)
 			if err != nil {
@@ -30,7 +31,7 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 			}
 
 			content := string(buf)
-			bytecode, err := compileFileContent(content)
+			bytecode, err := compileFileContent(content, optimize)
 			if err != nil {
 				return fmt.Errorf("failed to compile content: %v", err)
 			}
@@ -51,8 +52,9 @@ VFS-mounted storage backends (SQLite, S3, PostgreSQL, ephemeral, etc.)`,
 		},
 	}
 
-	cmd.Flags().BoolP("debug", "d", false, "Keep open after executing (default is 'false')")
-	cmd.Flags().BoolP("compress", "c", false, "Keep open after executing (default is 'false')")
+	cmd.Flags().BoolP("debug", "d", false, "")
+	cmd.Flags().BoolP("compress", "c", false, "")
+	cmd.Flags().BoolP("optimize", "o", false, "")
 
 	return cmd
 }

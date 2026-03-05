@@ -17,6 +17,8 @@ func (i *Instruction) String() string {
 		return fmt.Sprintf("%s index=%d", i.Operation, i.Argument)
 	case OpVarALLOC:
 		return fmt.Sprintf("%s slot=%d mask=%08b", i.Operation, i.Argument, i.Extra)
+	case OpVarINIT:
+		return fmt.Sprintf("%s slot=%d mask=%08b const=%d", i.Operation, i.Argument, i.Extra, i.Offset)
 	case OpVarPTR:
 		return fmt.Sprintf("%s slot=%d tag=%d", i.Operation, i.Argument, i.Extra)
 	case OpVarSTORE, OpVarLOAD, OpVarFREE:

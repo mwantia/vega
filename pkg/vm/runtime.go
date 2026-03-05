@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -27,7 +26,7 @@ type Runtime struct {
 	Frames []*CallFrame
 	Index  int
 
-	exprStack *ExprStack
+	stack     *Stack
 	allocator alloc.Allocator // global allocator shared across all scopes
 	slots     []SlotEntry
 	session   *RuntimeSession
@@ -60,121 +59,22 @@ type CallFrame struct {
 	bumpPtr      int // next free byte within [RegionOffset, RegionOffset+RegionSize)
 
 	// Saved caller state — restored when this frame returns.
-	savedExprStack *ExprStack
-	savedSlots     []SlotEntry
-}
-
-func (r *Runtime) ExecuteFrames(ctx context.Context) error {
-	for {
-		select {
-		// Check for context cancellation
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			// Continue execution
-		}
-
-		frame := r.IndexedFrame()
-		if frame.InstructionPointer >= len(frame.ByteCode.Instructions) {
-			if r.Index == 0 {
-				return nil
-			}
-			// Implicit void return — clean up and restore caller state.
-			if err := r.doReturn(frame, false, slot.StackSlot{}); err != nil {
-				return err
-			}
-			continue
-		}
-
-		instr := frame.ByteCode.Instructions[frame.InstructionPointer]
-		frame.InstructionPointer++
-
-		if err := r.ExecuteInstruction(instr, frame); err != nil {
-			return fmt.Errorf("line %d: %w", instr.SourceLine, err)
-		}
-	}
+	savedStack *Stack
+	savedSlots []SlotEntry
 }
 
 func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFrame) error {
 	switch instr.Operation {
-	case compiler.OpLoadCONST:
-		c := frame.ByteCode.Constants[instr.Argument]
-		if r.exprStack == nil {
-			return fmt.Errorf("instr 'OpLoadCONST': undefined stack")
-		}
-		var s slot.StackSlot
-		s.Tag = c.Tag
-		if c.Tag == slot.TagSlice {
-			// String/slice constants live in the ByteCode constants table.
-			// Store a reference to the slice (no copy) — HeapVal points to
-			// the constants table backing, which outlives any stack slot.
-			s.HeapVal = c.Data
-		} else {
-			size := slot.SizeForTag(c.Tag)
-			copy(s.Data[:size], c.Data)
-		}
-		r.exprStack.Push(s)
-
-	case compiler.OpStackPOP:
-		if r.exprStack == nil {
-			return fmt.Errorf("instr 'OpStackPOP': undefined stack")
-		}
-		if _, err := r.exprStack.Pop(); err != nil {
-			return fmt.Errorf("instr 'OpStackPOP': %w", err)
-		}
-
-	case compiler.OpVarALLOC:
-		slotID := instr.Argument
-		mask := instr.Extra
-		size := slot.MaxSizeForMask(mask)
-
-		if r.allocator == nil {
-			return fmt.Errorf("instr 'OpVarALLOC': no allocator active")
-		}
-
-		var offset int
-		var inRegion bool
-		currentFrame := r.IndexedFrame()
-		if currentFrame.RegionSize > 0 {
-			// Bump-allocate within the frame's pre-claimed contiguous region.
-			if currentFrame.bumpPtr+size > currentFrame.RegionOffset+currentFrame.RegionSize {
-				return fmt.Errorf("instr 'OpVarALLOC': frame region exhausted (bump=%d size=%d region=[%d,%d))",
-					currentFrame.bumpPtr, size, currentFrame.RegionOffset, currentFrame.RegionOffset+currentFrame.RegionSize)
-			}
-			offset = currentFrame.bumpPtr
-			currentFrame.bumpPtr += size
-			inRegion = true
-		} else {
-			var err error
-			offset, err = r.allocator.Alloc(size)
-			if err != nil {
-				return fmt.Errorf("instr 'OpVarALLOC': %w", err)
-			}
-		}
-
-		// Grow slot table if needed
-		for len(r.slots) <= slotID {
-			r.slots = append(r.slots, SlotEntry{})
-		}
-		r.slots[slotID] = SlotEntry{
-			Offset:   offset,
-			Capacity: size,
-			Tag:      0, // uninitialized until first store
-			Mask:     mask,
-			Alive:    true,
-			InRegion: inRegion,
-		}
-
 	case compiler.OpVarSTORE:
 		slotID := instr.Argument
 		if slotID >= len(r.slots) || !r.slots[slotID].Alive {
 			return fmt.Errorf("instr 'OpVarSTORE': slot %d is not alive", slotID)
 		}
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpVarSTORE': undefined stack")
 		}
 
-		s, err := r.exprStack.Pop()
+		s, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpVarSTORE': %w", err)
 		}
@@ -247,7 +147,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if sl.Tag == 0 {
 			return fmt.Errorf("instr 'OpVarLOAD': slot %d is uninitialized", slotID)
 		}
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpVarLOAD': undefined stack")
 		}
 
@@ -263,7 +163,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			size := slot.SizeForTag(sl.Tag)
 			copy(s.Data[:size], r.allocator.Slice(sl.Offset, size))
 		}
-		r.exprStack.Push(s)
+		r.stack.Push(s)
 
 	case compiler.OpVarFREE:
 		slotID := instr.Argument
@@ -329,11 +229,11 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		tag := slot.TypeTag(instr.Extra)
 		size := slot.SizeForTag(tag)
 
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpVarPTR': undefined stack")
 		}
 
-		s, err := r.exprStack.Pop()
+		s, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpVarPTR': %w", err)
 		}
@@ -410,11 +310,11 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if slotID >= len(r.slots) || !r.slots[slotID].Alive {
 			return fmt.Errorf("instr 'OpFieldSTORE': slot %d is not alive", slotID)
 		}
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpFieldSTORE': undefined stack")
 		}
 
-		s, err := r.exprStack.Pop()
+		s, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpFieldSTORE': %w", err)
 		}
@@ -455,7 +355,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if slotID >= len(r.slots) || !r.slots[slotID].Alive {
 			return fmt.Errorf("instr 'OpFieldLOAD': slot %d is not alive", slotID)
 		}
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpFieldLOAD': undefined stack")
 		}
 
@@ -473,7 +373,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			view := r.allocator.Slice(sl.Offset+fieldOffset, fieldSize)
 			copy(s.Data[:fieldSize], view)
 		}
-		r.exprStack.Push(s)
+		r.stack.Push(s)
 
 	case compiler.OpCall:
 		name := frame.ByteCode.Names[instr.Offset]
@@ -483,7 +383,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		// Pop arguments left-to-right from the current expr stack.
 		args := make([]slot.StackSlot, argc)
 		for i := argc - 1; i >= 0; i-- {
-			s, err := r.exprStack.Pop()
+			s, err := r.stack.Pop()
 			if err != nil {
 				return fmt.Errorf("instr 'OpCall' ('%s'): %w", name, err)
 			}
@@ -499,11 +399,11 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 
 			// Save the caller's expression stack and slot table.
 			currentFrame := r.IndexedFrame()
-			currentFrame.savedExprStack = r.exprStack
+			currentFrame.savedStack = r.stack
 			currentFrame.savedSlots = r.slots
 
 			// Initialize fresh state for the callee.
-			r.exprStack = &ExprStack{}
+			r.stack = &Stack{}
 			r.slots = make([]SlotEntry, 0)
 			r.pendingArgs = args
 
@@ -555,7 +455,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpCall' ('%s'): %w", name, err)
 		}
 		if exprCall && desc.ReturnTag != slot.TagVoid {
-			r.exprStack.Push(result)
+			r.stack.Push(result)
 		}
 
 	case compiler.OpReturn:
@@ -565,9 +465,9 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 
 		hasValue := instr.Extra == 1
 		var retSlot slot.StackSlot
-		if hasValue && r.exprStack != nil {
+		if hasValue && r.stack != nil {
 			var err error
-			retSlot, err = r.exprStack.Pop()
+			retSlot, err = r.stack.Pop()
 			if err != nil {
 				return fmt.Errorf("instr 'OpReturn': %w", err)
 			}
@@ -583,10 +483,10 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			return fmt.Errorf("instr 'OpLoadArg': index %d out of range (have %d pending)",
 				idx, len(r.pendingArgs))
 		}
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpLoadArg': expr stack not initialised")
 		}
-		r.exprStack.Push(r.pendingArgs[idx])
+		r.stack.Push(r.pendingArgs[idx])
 
 	case compiler.OpVarLoadRaw:
 		slotID := instr.Argument
@@ -595,7 +495,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if slotID >= len(r.slots) || !r.slots[slotID].Alive {
 			return fmt.Errorf("instr 'OpVarLoadRaw': slot %d is not alive", slotID)
 		}
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpVarLoadRaw': expr stack not initialised")
 		}
 
@@ -607,20 +507,20 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 			Offset: uint32(sl.Offset),
 			Length: uint32(size),
 		})
-		r.exprStack.Push(s)
+		r.stack.Push(s)
 
 	case compiler.OpPtrLOAD:
 		tag := slot.TypeTag(instr.Extra)
 		size := slot.SizeForTag(tag)
 
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpPtrLOAD': undefined stack")
 		}
 		if r.allocator == nil {
 			return fmt.Errorf("instr 'OpPtrLOAD': no allocator active")
 		}
 
-		s, err := r.exprStack.Pop()
+		s, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpPtrLOAD': %w", err)
 		}
@@ -638,7 +538,7 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		var result slot.StackSlot
 		result.Tag = tag
 		copy(result.Data[:size], view)
-		r.exprStack.Push(result)
+		r.stack.Push(result)
 
 	case compiler.OpLoadArgStencil:
 		argIdx := instr.Argument
@@ -694,26 +594,26 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 
 	case compiler.OpBuildSTRING:
 		n := instr.Argument
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpBuildSTRING': undefined stack")
 		}
 		parts := make([]string, n)
 		for i := n - 1; i >= 0; i-- {
-			s, err := r.exprStack.Pop()
+			s, err := r.stack.Pop()
 			if err != nil {
 				return fmt.Errorf("instr 'OpBuildSTRING': stack underflow")
 			}
 			parts[i] = r.slotString(s)
 		}
 		result := strings.Join(parts, "")
-		r.exprStack.Push(slot.NewString(result))
+		r.stack.Push(slot.NewString(result))
 
 	case compiler.OpGetMember:
 		name := frame.ByteCode.Names[instr.Offset]
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpGetMember': undefined stack")
 		}
-		s, err := r.exprStack.Pop()
+		s, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpGetMember': %w", err)
 		}
@@ -728,25 +628,25 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpGetMember' ('%s'): %w", name, err)
 		}
-		r.exprStack.Push(result)
+		r.stack.Push(result)
 
 	case compiler.OpCallMethod:
 		name := frame.ByteCode.Names[instr.Offset]
 		argc := instr.Argument
-		if r.exprStack == nil {
+		if r.stack == nil {
 			return fmt.Errorf("instr 'OpCallMethod': undefined stack")
 		}
 
 		argSlots := make([]slot.StackSlot, argc)
 		for i := argc - 1; i >= 0; i-- {
-			s, err := r.exprStack.Pop()
+			s, err := r.stack.Pop()
 			if err != nil {
 				return fmt.Errorf("instr 'OpCallMethod': %w", err)
 			}
 			argSlots[i] = s
 		}
 
-		objSlot, err := r.exprStack.Pop()
+		objSlot, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCallMethod': %w", err)
 		}
@@ -774,16 +674,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		}
 
 		// Push result (VoidSlot for void methods) so OpStackPOP in statement context always succeeds.
-		r.exprStack.Push(result)
-
-	// ── Arithmetic ────────────────────────────────────────────────────────────
+		r.stack.Push(result)
 
 	case compiler.OpBinAdd:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinAdd': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinAdd': %w", err)
 		}
@@ -791,14 +689,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinAdd': %w", err)
 		}
-		r.exprStack.Push(result)
+		r.stack.Push(result)
 
 	case compiler.OpBinSub:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinSub': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinSub': %w", err)
 		}
@@ -806,14 +704,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinSub': %w", err)
 		}
-		r.exprStack.Push(result)
+		r.stack.Push(result)
 
 	case compiler.OpBinMul:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinMul': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinMul': %w", err)
 		}
@@ -821,14 +719,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinMul': %w", err)
 		}
-		r.exprStack.Push(result)
+		r.stack.Push(result)
 
 	case compiler.OpBinDiv:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinDiv': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinDiv': %w", err)
 		}
@@ -836,14 +734,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinDiv': %w", err)
 		}
-		r.exprStack.Push(result)
+		r.stack.Push(result)
 
 	case compiler.OpBinMod:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinMod': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinMod': %w", err)
 		}
@@ -851,10 +749,10 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpBinMod': %w", err)
 		}
-		r.exprStack.Push(result)
+		r.stack.Push(result)
 
 	case compiler.OpUnNeg:
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpUnNeg': %w", err)
 		}
@@ -862,16 +760,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpUnNeg': %w", err)
 		}
-		r.exprStack.Push(result)
-
-	// ── Comparison ───────────────────────────────────────────────────────────
+		r.stack.Push(result)
 
 	case compiler.OpCmpEQ:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpEQ': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpEQ': %w", err)
 		}
@@ -879,14 +775,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpEQ': %w", err)
 		}
-		r.exprStack.Push(slot.NewBool(cmp == 0))
+		r.stack.Push(slot.NewBool(cmp == 0))
 
 	case compiler.OpCmpNE:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpNE': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpNE': %w", err)
 		}
@@ -894,14 +790,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpNE': %w", err)
 		}
-		r.exprStack.Push(slot.NewBool(cmp != 0))
+		r.stack.Push(slot.NewBool(cmp != 0))
 
 	case compiler.OpCmpLT:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpLT': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpLT': %w", err)
 		}
@@ -909,14 +805,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpLT': %w", err)
 		}
-		r.exprStack.Push(slot.NewBool(cmp < 0))
+		r.stack.Push(slot.NewBool(cmp < 0))
 
 	case compiler.OpCmpLE:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpLE': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpLE': %w", err)
 		}
@@ -924,14 +820,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpLE': %w", err)
 		}
-		r.exprStack.Push(slot.NewBool(cmp <= 0))
+		r.stack.Push(slot.NewBool(cmp <= 0))
 
 	case compiler.OpCmpGT:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpGT': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpGT': %w", err)
 		}
@@ -939,14 +835,14 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpGT': %w", err)
 		}
-		r.exprStack.Push(slot.NewBool(cmp > 0))
+		r.stack.Push(slot.NewBool(cmp > 0))
 
 	case compiler.OpCmpGE:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpGE': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpGE': %w", err)
 		}
@@ -954,38 +850,36 @@ func (r *Runtime) ExecuteInstruction(instr compiler.Instruction, frame *CallFram
 		if err != nil {
 			return fmt.Errorf("instr 'OpCmpGE': %w", err)
 		}
-		r.exprStack.Push(slot.NewBool(cmp >= 0))
-
-	// ── Logical ──────────────────────────────────────────────────────────────
+		r.stack.Push(slot.NewBool(cmp >= 0))
 
 	case compiler.OpLogAnd:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpLogAnd': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpLogAnd': %w", err)
 		}
-		r.exprStack.Push(slot.NewBool(a.Data[0] != 0 && b.Data[0] != 0))
+		r.stack.Push(slot.NewBool(a.Data[0] != 0 && b.Data[0] != 0))
 
 	case compiler.OpLogOr:
-		b, err := r.exprStack.Pop()
+		b, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpLogOr': %w", err)
 		}
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpLogOr': %w", err)
 		}
-		r.exprStack.Push(slot.NewBool(a.Data[0] != 0 || b.Data[0] != 0))
+		r.stack.Push(slot.NewBool(a.Data[0] != 0 || b.Data[0] != 0))
 
 	case compiler.OpLogNot:
-		a, err := r.exprStack.Pop()
+		a, err := r.stack.Pop()
 		if err != nil {
 			return fmt.Errorf("instr 'OpLogNot': %w", err)
 		}
-		r.exprStack.Push(slot.NewBool(a.Data[0] == 0))
+		r.stack.Push(slot.NewBool(a.Data[0] == 0))
 	}
 
 	return nil
@@ -1012,30 +906,26 @@ func (r *Runtime) doReturn(frame *CallFrame, hasValue bool, retSlot slot.StackSl
 			retSlot.HeapVal = data
 		}
 	}
-
 	// Free slots that are NOT part of the frame region individually.
 	for _, slot := range r.slots {
 		if slot.Alive && !slot.Alias && !slot.InRegion {
 			r.allocator.Free(slot.Offset, slot.Capacity)
 		}
 	}
-
 	// Release the entire frame region atomically.
 	if frame.RegionSize > 0 {
 		r.allocator.Free(frame.RegionOffset, frame.RegionSize)
 	}
-
 	// Step back to the caller's frame and restore its saved state.
 	r.Index--
 	callerFrame := r.Frames[r.Index]
-	r.exprStack = callerFrame.savedExprStack
+	r.stack = callerFrame.savedStack
 	r.slots = callerFrame.savedSlots
-	callerFrame.savedExprStack = nil
+	callerFrame.savedStack = nil
 	callerFrame.savedSlots = nil
-
 	// Push return value only when the call site expected one.
-	if hasValue && frame.ExprCall && r.exprStack != nil {
-		r.exprStack.Push(retSlot)
+	if hasValue && frame.ExprCall && r.stack != nil {
+		r.stack.Push(retSlot)
 	}
 
 	return nil

@@ -18,17 +18,19 @@ var (
 )
 
 type Compiler struct {
-	scope    *SymbolTable
-	stencils map[string]*StencilDefinition
+	scope     *SymbolTable
+	stencils  map[string]*StencilDefinition
+	Optimizer *Peephole // nil disables optimization; defaults to DefaultPeephole()
 }
 
 func NewCompiler() *Compiler {
 	return &Compiler{
-		stencils: make(map[string]*StencilDefinition),
+		stencils:  make(map[string]*StencilDefinition),
+		Optimizer: DefaultPeephole(),
 	}
 }
 
-func (c *Compiler) Compile(ast parser.AST) (*ByteCode, error) {
+func (c *Compiler) Compile(ast parser.AST, optimize bool) (*ByteCode, error) {
 	byteCode := &ByteCode{
 		Instructions: make([]Instruction, 0),
 		Constants:    make([]Constant, 0),
@@ -54,6 +56,10 @@ func (c *Compiler) Compile(ast parser.AST) (*ByteCode, error) {
 		if err := c.compileStatement(byteCode, stmt); err != nil {
 			return nil, fmt.Errorf("failed to compile statement '%s': %v", stmt.String(), err)
 		}
+	}
+
+	if c.Optimizer != nil && optimize {
+		return c.Optimizer.Optimize(byteCode), nil
 	}
 
 	return byteCode, nil

@@ -27,6 +27,8 @@ const (
 
 	OpPtrLOAD // pop offset from expr stack, read tag-typed value from allocator, push result (extra: type tag)
 
+	OpVarINIT // alloc slot + store constant directly, no stack interaction (arg: slot ID, extra: type mask, offset: const index)
+
 	OpBuildSTRING // pop N values, call String() on each, concat, push heap SliceValue (arg: N)
 
 	OpGetMember  // pop value, get named member via Memberable interface (offset: name index in Names[])
@@ -77,6 +79,8 @@ var operationNames = map[OperationCode]string{
 	OpLoadArgStencil: "LOAD_ARG_STENCIL",
 
 	OpPtrLOAD: "PTR_LOAD",
+
+	OpVarINIT: "VAR_INIT",
 
 	OpBuildSTRING: "BUILD_STRING",
 
