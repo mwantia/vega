@@ -1,520 +1,282 @@
 # Vega
 
-**Vega** (Virtual Execution & Graph Abstraction) is a lightweight scripting language designed for file system operations and automation. It features Python-like syntax, a stack-based virtual machine, and is written in pure Go with no CGO dependencies.
+**Vega** (Virtual Execution & Graph Abstraction) is a lightweight scripting language with a stack-based bytecode VM, written in pure Go. It features a statically-typed value model, user-defined structs and functions, string interpolation, and first-class integration with the VFS library for multi-backend filesystem operations.
 
 **Version**: 0.0.1-dev
+**Module**: `github.com/mwantia/vega`
 
-## Features
-
-- **Simple syntax** - Python-like scripting that's easy to learn
-- **Interactive TUI REPL** - Full-featured terminal UI with history search, autocomplete, and bytecode inspection
-- **Script execution** - Run `.vega` script files
-- **Pure Go** - No CGO, easy cross-compilation
-- **Built-in functions** - Rich standard library for strings, arrays, I/O, and VFS operations
-- **VFS integration** - Access multiple storage backends (local filesystem, SQLite, PostgreSQL, S3, Consul)
-
-## Installation
+## Build
 
 ```bash
-go install github.com/mwantia/vega/cmd/vega@latest
+task build        # static Linux binary → ./build/vega
+task test         # run tests with coverage
+task run          # start interactive TUI REPL
+task run -- -s test/comprehensive.vega  # run script
 ```
 
-Or build from source:
+## CLI
+
+```
+vega [uri]                       Start interactive TUI REPL (default mount: ephemeral://)
+vega compile <input> <output>    Compile .vega source to .vgc binary
+vega run <script>                Execute a .vega or .vgc file
+vega version                     Show version information
+```
+
+### Flags
+
+**`vega`**
+```
+-d, --disasm    Show disassembled bytecode in the REPL
+```
+
+**`vega compile`**
+```
+-d, --debug     Include source-line debug info in .vgc
+-c, --compress  Compress the .vgc payload with zlib
+```
+
+### VFS Mount URIs
+
+The REPL mounts a VFS backend at `/` on startup:
 
 ```bash
-git clone https://github.com/mwantia/vega.git
-cd vega
-go build -o vega ./cmd/vega
+vega                        # ephemeral (in-memory, default)
+vega file:///path/to/dir    # local filesystem
+vega sqlite:///path/to.db   # SQLite
+vega s3://bucket/prefix     # S3
+vega postgres://...         # PostgreSQL
+vega consul://host/prefix   # Consul
 ```
 
-## Quick Start
+## Language
 
-### Interactive REPL
+### Types
 
-```bash
-$ vega
-```
+| Type | Suffix | Size | Example |
+|------|--------|------|---------|
+| `byte` | `b` | 1 byte | `200b` |
+| `short` | `s` | 2 bytes | `32767s` |
+| `int` | _(default)_ | 4 bytes | `42` |
+| `long` | `l` | 8 bytes | `9000l` |
+| `float` | `f` | 4 bytes | `3.14f` |
+| `decimal` | _(default)_ | 8 bytes | `2.718` |
+| `bool` | | 1 byte | `true`, `false` |
+| `string` | | bounded slice | `"hello"` |
 
-The TUI REPL provides:
-- Command history with search (Ctrl+R)
-- Tab completion for keywords and built-ins
-- Scrollable output (mouse wheel)
-- Bytecode disassembly panel (Ctrl+D)
-- Multiline input (auto-detected by brace matching)
-
-### Execute a Command
-
-```bash
-vega -c 'println("Hello from Vega!")'
-```
-
-### Run a Script
-
-```bash
-vega script.vega
-# or explicitly:
-vega -s script.vega
-```
-
-### With VFS Mount
-
-```bash
-# Mount ephemeral (in-memory) filesystem
-vega ephemeral://
-
-# Mount local directory
-vega file:///path/to/dir
-
-# Mount SQLite database
-vega sqlite:///path/to/db.sqlite
-```
-
-## Language Guide
+`'A'` is a character literal — it resolves to its ASCII integer value.
 
 ### Variables
 
 ```vega
-name = "Alice"
-age = 30
-pi = 3.14159
-active = true
-nothing = nil
+# Untyped — type inferred from literal
+x = 42
+name = "Vega"
+
+# Type-annotated
+count: int = 0
+flag: bool = true
+
+# Union type — accepts either int or bool at runtime
+u: int|bool = 42
+u = true
+
+# Explicit string capacity (defaults to len(literal) for string literals)
+buf: string<128> = ""
 ```
 
-### Data Types
+### String Interpolation
 
-| Type | Example |
-|------|---------|
-| Integer | `42`, `-17`, `0` |
-| Float | `3.14`, `-0.5` |
-| String | `"hello"`, `"world"` |
-| Boolean | `true`, `false` |
-| Nil | `nil` |
-| Array | `[1, 2, 3]` |
-| Map | `{name: "Alice", age: 30}` |
+```vega
+name = "World"
+print($"Hello, {name}!")       # → Hello, World!
+print($"x = {x}, y = {y}")
+
+# Literal braces use {{ and }}
+print($"JSON: {{key: {x}}}")   # → JSON: {key: 42}
+```
 
 ### Operators
 
 ```vega
 # Arithmetic
-x = 10 + 5      # 15
-x = 10 - 5      # 5
-x = 10 * 5      # 50
-x = 10 / 5      # 2
-x = 10 % 3      # 1
-x = -5          # negation
+x + y    x - y    x * y    x / y    x % y    -x
 
 # Comparison
-x == y          # equal
-x != y          # not equal
-x < y           # less than
-x <= y          # less or equal
-x > y           # greater than
-x >= y          # greater or equal
+x == y   x != y   x < y   x <= y   x > y   x >= y
 
 # Logical
-a && b          # and (short-circuit)
-a || b          # or (short-circuit)
-!a              # not
-
-# String concatenation
-s = "Hello" + " " + "World"
+a && b   a || b   !a
 ```
 
 ### Control Flow
 
-#### If/Else
-
 ```vega
 if x > 10 {
-    println("big")
+    print("big")
 } else {
-    println("small")
+    print("small")
 }
-```
 
-#### While Loop
-
-```vega
 i = 0
 while i < 5 {
-    println(i)
+    print($"i = {i}")
     i = i + 1
-}
-```
-
-#### For Loop
-
-```vega
-for item in [1, 2, 3, 4, 5] {
-    println(item)
-}
-
-# With range()
-for i in range(10) {
-    println(i)
 }
 ```
 
 ### Functions
 
+Parameters are always type-annotated. Both primitive and struct types are supported.
+
 ```vega
-fn greet(name) {
-    println("Hello, " + name + "!")
-}
-
-greet("World")
-
-fn add(a, b) {
+fn add(a: int, b: int) {
     return a + b
 }
 
-result = add(3, 4)  # 7
-```
+result = add(3, 4)
 
-#### Recursion
-
-```vega
-fn factorial(n) {
-    if n <= 1 {
-        return 1
-    }
-    return n * factorial(n - 1)
+fn greet(name: string) {
+    print($"Hello, {name}!")
 }
 
-println(factorial(5))  # 120
+greet("Vega")
+
+# Void return (no value)
+fn reset(n: int) {
+    print($"resetting {n}")
+    return
+}
 ```
 
-### Arrays
+### Structs
 
 ```vega
-arr = [1, 2, 3, 4, 5]
+struct point {
+    x: int
+    y: int
+}
 
-# Access elements
-first = arr[0]      # 1
-arr[0] = 10         # modify
+p = point { x = 10, y = 20 }
+print($"({p.x}, {p.y})")
 
-# Built-in functions
-len(arr)            # 5
-push(arr, 6)        # append
-last = pop(arr)     # remove last
-contains(arr, 3)    # true
-index(arr, 3)       # 2
+# Structs as function parameters
+fn distance(a: point, b: point) {
+    dx = a.x - b.x
+    dy = a.y - b.y
+    return dx * dx + dy * dy
+}
+
+# String fields with explicit capacity
+struct person {
+    id:   int
+    name: string<64>
+}
 ```
 
-### Maps
+### Tuples
+
+Tuples pack mixed types into a single value. Fields are accessed by index.
 
 ```vega
-person = {name: "Alice", age: 30, city: "NYC"}
+pair = (10, true)
+print($"first={pair.0} second={pair.1}")
 
-# Access values
-name = person["name"]
-
-# Modify
-person["age"] = 31
-
-# Built-in functions
-len(person)         # 3
-k = keys(person)    # ["name", "age", "city"]
+mixed = (1s, 2, 3l, 3.14f, true)
+print($"{mixed.0} {mixed.1} {mixed.2}")
 ```
 
-### Comments
+### Pointer Aliases
+
+`*type(offset)` creates a typed view into the allocator buffer at a raw byte offset.
 
 ```vega
-# This is a comment
-x = 42  # inline comment
+x = 555
+ptr = *int(0)   # alias pointing to allocator offset 0
+print($"alias = {ptr}")
+```
+
+### Memory
+
+```vega
+temp = 12345
+free(temp)   # return temp's slot to the allocator
 ```
 
 ## Built-in Functions
 
-### I/O
+### Core
 
 | Function | Description |
 |----------|-------------|
-| `print(args...)` | Print without newline |
-| `println(args...)` | Print with newline |
-| `input([prompt])` | Read line from stdin, optionally print prompt |
-
-### Streams
-
-| Function | Description |
-|----------|-------------|
-| `stdin()` | Get stdin as a stream |
-| `stdout()` | Get stdout as a stream |
-| `stderr()` | Get stderr as a stream |
-
-### Type Conversion
-
-| Function | Description |
-|----------|-------------|
-| `type(value)` | Get type name as string |
-| `string(value)` | Convert to string |
-| `integer(value)` | Convert to integer |
-| `float(value)` | Convert to float |
-| `boolean(value)` | Convert to boolean |
-
-### Utility
-
-| Function | Description |
-|----------|-------------|
-| `range(n)` | Array [0, 1, ..., n-1] |
-| `range(start, end)` | Array [start, ..., end-1] |
-| `assert(cond)` | Error if condition is false |
-| `assert(cond, msg)` | Error with message if false |
+| `print(args...)` | Print all args (space-separated) with a newline |
+| `string(value)` | Convert any value to its string representation |
+| `type(value)` | Return the type name of a value as a string |
 
 ### VFS Operations
 
+Require a mounted VFS (default: `ephemeral://`).
+
 | Function | Description |
 |----------|-------------|
-| `read(path[, offset, size])` | Read file contents |
-| `write(path, data[, offset])` | Write data to file, returns bytes written |
-| `stat(path)` | Get file metadata |
-| `lookup(path)` | Check if path exists (returns boolean) |
-| `readdir(path)` | List directory contents (array of metadata) |
-| `createdir(path)` | Create directory |
-| `remdir(path[, force])` | Remove directory |
-| `unlink(path)` | Delete file |
-| `rename(old, new)` | Rename/move file or directory |
-| `open(path[, mode])` | Open file stream (modes: "r", "w", "a", "rw", "wx") |
-| `exec(cmd, args...)` | Execute VFS command, returns exit code |
-| `sexec(cmd, args...)` | Execute with stdin/stdout/stderr streams |
-| `capture(cmd, args...)` | Execute and capture output as string |
-| `etag(path[, size])` | Calculate or retrieve file ETag |
+| `read(path, offset, size)` | Read `size` bytes from `path` starting at `offset` |
+| `exists(path)` | Return `true` if `path` exists in the mounted VFS |
 
-## Type Methods
+## String Methods
 
-Values support method calls using dot notation (e.g., `str.upper()`).
+Methods are called with dot notation: `s.upper()`. Members (no parentheses) are accessed as `s.length`.
 
-### Universal Methods (All Types)
+| Name | Kind | Description |
+|------|------|-------------|
+| `.length` | member | Byte length of the string content (up to first `\0`) |
+| `.capacity` | member | Total allocated capacity of the string buffer |
+| `.upper()` | method | Return uppercase copy |
+| `.lower()` | method | Return lowercase copy |
+| `.trim()` | method | Strip leading/trailing whitespace |
+| `.contains(sub)` | method | `true` if string contains `sub` |
+| `.startswith(prefix)` | method | `true` if string starts with `prefix` |
+| `.endswith(suffix)` | method | `true` if string ends with `suffix` |
+| `.index(sub)` | method | Byte index of `sub`, or `-1` if not found |
+| `.trimprefix(prefix)` | method | Remove leading `prefix` if present |
+| `.trimsuffix(suffix)` | method | Remove trailing `suffix` if present |
+| `.replace(old, new)` | method | Replace all occurrences of `old` with `new` |
+| `.slice(from[, length])` | method | Return substring starting at `from` |
 
-These methods are available on all value types:
+## Compiled Objects (.vgc)
 
-| Method | Description |
-|--------|-------------|
-| `v.string()` | Convert value to string |
-| `v.type()` | Get type name |
-| `v.boolean()` | Convert to boolean (truthy/falsy) |
-| `v.equal(other)` | Check equality with another value |
-| `v.compare(other)` | Compare values (-1, 0, 1) for comparable types |
-
-### String Methods
-
-| Method | Description |
-|--------|-------------|
-| `s.length()` | Get string length |
-| `s.upper()` | Convert to uppercase |
-| `s.lower()` | Convert to lowercase |
-| `s.trim()` | Remove leading/trailing whitespace |
-| `s.split(sep)` | Split into array |
-| `s.contains(sub)` | Check if contains substring |
-| `s.startswith(prefix)` | Check prefix |
-| `s.endswith(suffix)` | Check suffix |
-| `s.replace(old, new)` | Replace all occurrences |
-| `s.index(sub)` | Find index of substring (-1 if not found) |
-
-### Array Methods
-
-| Method | Description |
-|--------|-------------|
-| `arr.length()` | Get array length |
-| `arr.push(val)` | Append value to array |
-| `arr.pop()` | Remove and return last element |
-| `arr.join(sep)` | Join elements into string |
-| `arr.contains(val)` | Check if array contains value |
-| `arr.index(val)` | Find index of value (-1 if not found) |
-
-### Map Methods
-
-| Method | Description |
-|--------|-------------|
-| `m.length()` | Get number of key-value pairs |
-| `m.keys()` | Get array of keys |
-
-### Stream Methods
-
-Streams are returned by `open()`, `stdin()`, `stdout()`, `stderr()`.
-
-| Method | Description |
-|--------|-------------|
-| `stream.canread()` | Check if stream is readable |
-| `stream.canwrite()` | Check if stream is writable |
-| `stream.isclosed()` | Check if stream is closed |
-| `stream.read()` | Read all available data |
-| `stream.readln()` | Read a single line |
-| `stream.readn(n)` | Read n bytes |
-| `stream.write(data)` | Write data, returns bytes written |
-| `stream.writeln(data)` | Write data with newline |
-| `stream.copy(dest)` | Copy all data to destination stream |
-| `stream.flush()` | Flush buffered data |
-| `stream.close()` | Close the stream |
-
-### Metadata Fields
-
-Metadata values (from `stat()`, `readdir()`) support field access via indexing:
-
-```vega
-meta = stat("/file.txt")
-println(meta["key"])      # file path
-println(meta["size"])     # file size
-println(meta["isdir"])    # is directory?
-```
-
-| Field | Description |
-|-------|-------------|
-| `id` | Unique identifier |
-| `key` | File path |
-| `mode` | Permission mode |
-| `size` | File size in bytes |
-| `accesstime` | Last access time (RFC3339) |
-| `modifytime` | Last modification time (RFC3339) |
-| `createtime` | Creation time (RFC3339) |
-| `uid` | Owner user ID |
-| `gid` | Owner group ID |
-| `contenttype` | MIME content type |
-| `etag` | Entity tag |
-| `filetype` | Type string ("file", "dir", etc.) |
-| `isdir` | Is directory (boolean) |
-| `isfile` | Is regular file (boolean) |
-| `ismount` | Is mount point (boolean) |
-| `issymlink` | Is symbolic link (boolean) |
-| `attributes` | Extended attributes (map) |
-
-## CLI Reference
+`vega compile` produces a `.vgc` binary file:
 
 ```
-Usage:
-  vega [uri]               Start REPL with optional VFS mount (default: ephemeral://)
-  vega -s <script.vega>    Execute a script file
-  vega -c '<code>'         Execute a single command
-
-Flags:
-  -c string       Execute a single Vega command
-  -s string       Execute a Vega script file
-  -i              Keep REPL open after executing script/command
-  -d              Show disassembled bytecode (debug)
-  --version       Show version information
-  --help          Show help message
+HEADER (16 bytes): magic "VEGA", format version, flags, source CRC, total size
+SECTION TABLE:     per-section ID, offset, and byte length
+SECTION 0:         constant pool (type tag + raw bytes per constant)
+SECTION 1:         interned name table (UTF-8 strings)
+SECTION 2:         instruction stream (fixed 10 bytes per instruction)
+SECTION 3:         debug info — source line numbers (optional, -d flag)
+SECTION 4:         function definitions with embedded bytecode
+SECTION 5:         struct stencil layouts (when struct params are used)
 ```
 
-## REPL Commands
-
-| Command | Description |
-|---------|-------------|
-| `help` or `?` | Show available commands |
-| `quit` | Exit the REPL |
-| `exit` | Exit the REPL |
-| `history` | Show command history |
-| `clear` | Clear the screen |
-| `vars` | Show defined variables |
-
-## REPL Key Bindings
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+R` | Search command history |
-| `Ctrl+L` | Clear screen |
-| `Ctrl+O` | Toggle expression result display |
-| `Ctrl+D` | Toggle bytecode disassembly panel |
-| `Ctrl+U` | Clear current line |
-| `Ctrl+K` | Kill to end of line |
-| `Ctrl+C` | Interrupt execution or quit |
-| `Tab` | Autocomplete |
-| `Up/Down` | Navigate history |
-| `Mouse wheel` | Scroll output |
-
-The REPL supports multiline input. Lines ending with `{` continue on the next line until braces are balanced.
-
-## Examples
-
-### FizzBuzz
-
-```vega
-for i in range(1, 101) {
-    if i % 15 == 0 {
-        println("FizzBuzz")
-    } else {
-        if i % 3 == 0 {
-            println("Fizz")
-        } else {
-            if i % 5 == 0 {
-                println("Buzz")
-            } else {
-                println(i)
-            }
-        }
-    }
-}
-```
-
-### Fibonacci
-
-```vega
-fn fib(n) {
-    if n <= 1 {
-        return n
-    }
-    return fib(n - 1) + fib(n - 2)
-}
-
-for i in range(15) {
-    println(fib(i))
-}
-```
-
-### Word Counter
-
-```vega
-text = "the quick brown fox jumps over the lazy dog"
-words = split(text, " ")
-println("Word count: " + string(len(words)))
-
-# Count occurrences of "the"
-count = 0
-for word in words {
-    if word == "the" {
-        count = count + 1
-    }
-}
-println("Occurrences of 'the': " + string(count))
-```
-
-### VFS File Operations
-
-```vega
-# Write a file
-write("/hello.txt", "Hello, World!")
-
-# Read it back
-content = read("/hello.txt")
-println(content)
-
-# List directory
-files = readdir("/")
-for f in files {
-    println(f)
-}
-
-# Get file metadata
-meta = stat("/hello.txt")
-println("Size: " + string(meta["size"]))
-```
+When compiled with `-c`, sections 0-5 are compressed as a single zlib stream; the 16-byte header is always uncompressed. `Deserialize` auto-detects compression from the flags field.
 
 ## Architecture
 
-Vega uses a classic interpreter pipeline:
-
 ```
-Source Code → Lexer → Tokens → Parser → AST → Compiler → Bytecode → VM → Result
+Source → Lexer → Tokens → Parser → AST → Compiler → Bytecode → VM → Result
 ```
 
-| Component | Package | Description |
-|-----------|---------|-------------|
-| Lexer | `pkg/lexer` | Tokenizes source code |
-| Parser | `pkg/parser` | Builds Abstract Syntax Tree |
-| Compiler | `pkg/compiler` | Generates bytecode |
-| VM | `pkg/vm` | Stack-based bytecode interpreter |
-| REPL | `pkg/repl` | TUI-based interactive shell |
+| Package | Purpose |
+|---------|---------|
+| `pkg/lexer` | Tokenises source; handles `$"..."` interpolation splitting |
+| `pkg/parser` | Recursive-descent parser, precedence climbing |
+| `pkg/compiler` | Bytecode emitter; symbol table; stencil layout |
+| `pkg/vm` | Stack-based interpreter; call frames; allocator integration |
+| `pkg/alloc` | Free-list / bump / pool allocators; snapshot manager |
+| `pkg/slot` | `StackSlot` type (tag + inline data + optional heap backing) |
+| `pkg/descriptor` | Global method/member/native registry |
+| `pkg/extension` | Built-in and VFS function registrations |
+| `pkg/repl` | TUI REPL (Bubble Tea) |
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License — see LICENSE for details.
